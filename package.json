@@ -1,6 +1,6 @@
 {
-  "name": "six",
-  "productName": "six",
+  "name": "aplicacion_de_monitoreo",
+  "productName": "aplicacion_de_monitoreo",
   "version": "1.0.0",
   "description": "My Electron application description",
   "main": ".vite/build/main.js",

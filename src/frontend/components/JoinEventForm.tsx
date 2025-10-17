@@ -37,7 +37,7 @@ const JoinEventForm = ({
   return (
     <div className="flex w-full max-w-xs flex-col text-xs text-white">
       <div className="mb-4 flex items-center justify-center text-sm">
-        <h1>SIX</h1>
+        <h1>Aplicacion de Monitoreo</h1>
       </div>
       <div className="flex flex-col gap-2">
         <div className="flex flex-col gap-1">
