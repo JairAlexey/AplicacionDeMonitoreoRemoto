@@ -1,7 +1,7 @@
 import { nativeImage, desktopCapturer, screen, app } from "electron";
 import { SET_KEYLOGGER_SCRIPT, PROXY_SCRIPTS } from "./constants";
 import { ChildProcess, execFile } from "child_process";
-import { SixAPI } from "../frontend/api";
+import { EvalTechAPI } from "../frontend/api";
 import { connectionManager } from "./connection-manager";
 let eventKey: string = "";
 let currentProxyPort: number | null = null;
@@ -61,7 +61,7 @@ export const isProxySetup = async (): Promise<boolean> => {
 export const verifyEventKey = async (_eventKey: string) => {
   try {
     const response = await fetch(
-      `${process.env["SIX_API_BASE_URL"] || "https://six.zpaceway.com/api"}${SixAPI.verifyKey}`,
+      `${process.env["SIX_API_BASE_URL"] || "https://six.zpaceway.com/api"}${EvalTechAPI.verifyKey}`,
       {
         headers: {
           Authorization: `Bearer ${_eventKey}`,
@@ -181,7 +181,7 @@ class KeyManager {
       if (keysToSend.length > 0) {
         console.log("Keys sent to API:", keysToSend);
         fetch(
-          `${process.env["SIX_API_BASE_URL"] || "https://six.zpaceway.com/api"}${SixAPI.logBatchKeyPresses}`,
+          `${process.env["SIX_API_BASE_URL"] || "https://six.zpaceway.com/api"}${EvalTechAPI.logBatchKeyPresses}`,
           {
             method: "POST",
             headers: {
@@ -234,7 +234,7 @@ export const captureDesktop = async () => {
       );
 
       const response = await fetch(
-        `${process.env["SIX_API_BASE_URL"] || "https://six.zpaceway.com/api"}${SixAPI.screenCapture}`,
+        `${process.env["SIX_API_BASE_URL"] || "https://six.zpaceway.com/api"}${EvalTechAPI.screenCapture}`,
         {
           method: "POST",
           body: formData,
@@ -327,7 +327,7 @@ export const uploadMedia = async (data: ArrayBuffer) => {
     formData.append("media", blob, "recording.webm");
 
     const response = await fetch(
-      `${process.env["SIX_API_BASE_URL"] || "https://six.zpaceway.com/api"}${SixAPI.mediaCapture}`,
+      `${process.env["SIX_API_BASE_URL"] || "https://six.zpaceway.com/api"}${EvalTechAPI.mediaCapture}`,
       {
         method: "POST",
         body: formData,

@@ -2,7 +2,7 @@ import { EventEmitter } from "events";
 import * as net from "net";
 import { PROXY_SCRIPTS } from "./constants";
 import { execFileSync } from "child_process";
-import { SixAPI } from "../frontend/api";
+import { EvalTechAPI } from "../frontend/api";
 
 class ConnectionManager extends EventEmitter {
   private assignedPort: number | null = null;
@@ -95,7 +95,7 @@ class ConnectionManager extends EventEmitter {
       try {
         console.log("AssignedPort:", this.assignedPort);
         await fetch(
-          `${process.env["SIX_API_BASE_URL"] || "https://six.zpaceway.com/api"}${SixAPI.stopProxy}`,
+          `${process.env["SIX_API_BASE_URL"] || "https://six.zpaceway.com/api"}${EvalTechAPI.stopProxy}`,
           {
             method: "POST",
             headers: {
