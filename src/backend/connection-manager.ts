@@ -95,7 +95,7 @@ class ConnectionManager extends EventEmitter {
       try {
         console.log("AssignedPort:", this.assignedPort);
         await fetch(
-          `${process.env["SIX_API_BASE_URL"] || "https://six.zpaceway.com/api"}${EvalTechAPI.stopProxy}`,
+          `${process.env["SIX_API_BASE_URL"] || "http://127.0.0.1:8000"}${EvalTechAPI.stopProxy}`,
           {
             method: "POST",
             headers: {

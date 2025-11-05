@@ -61,7 +61,7 @@ export const isProxySetup = async (): Promise<boolean> => {
 export const verifyEventKey = async (_eventKey: string) => {
   try {
     const response = await fetch(
-      `${process.env["SIX_API_BASE_URL"] || "https://six.zpaceway.com/api"}${EvalTechAPI.verifyKey}`,
+      `${process.env["SIX_API_BASE_URL"] || "http://127.0.0.1:8000"}${EvalTechAPI.verifyKey}`,
       {
         headers: {
           Authorization: `Bearer ${_eventKey}`,
@@ -181,7 +181,7 @@ class KeyManager {
       if (keysToSend.length > 0) {
         console.log("Keys sent to API:", keysToSend);
         fetch(
-          `${process.env["SIX_API_BASE_URL"] || "https://six.zpaceway.com/api"}${EvalTechAPI.logBatchKeyPresses}`,
+          `${process.env["SIX_API_BASE_URL"] || "http://127.0.0.1:8000"}${EvalTechAPI.logBatchKeyPresses}`,
           {
             method: "POST",
             headers: {
@@ -234,7 +234,7 @@ export const captureDesktop = async () => {
       );
 
       const response = await fetch(
-        `${process.env["SIX_API_BASE_URL"] || "https://six.zpaceway.com/api"}${EvalTechAPI.screenCapture}`,
+        `${process.env["SIX_API_BASE_URL"] || "http://127.0.0.1:8000"}${EvalTechAPI.screenCapture}`,
         {
           method: "POST",
           body: formData,
@@ -327,7 +327,7 @@ export const uploadMedia = async (data: ArrayBuffer) => {
     formData.append("media", blob, "recording.webm");
 
     const response = await fetch(
-      `${process.env["SIX_API_BASE_URL"] || "https://six.zpaceway.com/api"}${EvalTechAPI.mediaCapture}`,
+      `${process.env["SIX_API_BASE_URL"] || "http://127.0.0.1:8000"}${EvalTechAPI.mediaCapture}`,
       {
         method: "POST",
         body: formData,
