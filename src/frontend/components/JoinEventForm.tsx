@@ -59,14 +59,14 @@ const JoinEventForm = ({
             className="flex w-full items-center justify-center rounded-lg bg-red-500 py-2 text-white transition-colors hover:bg-red-600"
           >
             <FaSignOutAlt className="mr-2" size={15} />
-            Exit
+            Cerrar
           </button>
           <button
             onClick={handleJoin}
             className="flex w-full items-center justify-center rounded-lg bg-blue-500 py-2 text-white transition-colors hover:bg-blue-600"
           >
             <FaSignInAlt className="mr-2" size={15} />
-            Join
+            Unirse
           </button>
         </div>
         {showToast && (

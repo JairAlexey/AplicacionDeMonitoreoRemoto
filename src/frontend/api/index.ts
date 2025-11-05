@@ -1,8 +1,8 @@
 export const EvalTechAPI = {
-  logHttpRequest: "/events/logging/http-request",
-  logBatchKeyPresses: "/events/logging/batch-key-presses",
-  screenCapture: "/events/logging/screen/capture",
-  mediaCapture: "/events/logging/media/capture",
-  verifyKey: "/events/verify-event-key",
+  logHttpRequest: "events/api/logging/http-request",
+  logBatchKeyPresses: "events/api/logging/batch-key-presses",
+  screenCapture: "events/api/logging/screen/capture",
+  mediaCapture: "events/api/logging/media/capture",
+  verifyKey: "/events/api/verify-event-key", 
   stopProxy: "/proxy/release-port",
 };

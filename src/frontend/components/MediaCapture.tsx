@@ -352,7 +352,7 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
               className="flex w-full items-center justify-center rounded-lg bg-red-500 py-2 text-xs text-white transition-colors hover:bg-red-600"
             >
               <FaBackspace className="mr-2" size={15} />
-              Back
+              Regresar
             </button>
             <button
               onClick={toggleRecording}
@@ -373,7 +373,7 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
               ) : (
                 <>
                   <FaRegPlayCircle className="mr-2 inline-block" size={15} />
-                  Start
+                  Empezar monitoreo
                 </>
               )}
             </button>
