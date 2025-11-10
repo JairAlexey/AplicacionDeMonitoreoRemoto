@@ -122,23 +122,62 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
     return await blob.arrayBuffer();
   };
 
-  const toggleRecording = () => {
+  const toggleRecording = async () => {
     if (!mediaRecorder) {
       console.error("MediaRecorder not initialized");
       return;
     }
 
     if (isRecording) {
-      mediaRecorder.stop();
-      window.api.unregisterAllKeys();
-      window.api.stopCaptureInterval();
+      // Stop capture first and wait until the onstop handler (which uploads media)
+      // completes. Only then notify backend to stop monitoring so the final
+      // media upload is accepted.
+      try {
+        // Stop creating new logs locally
+        window.api.unregisterAllKeys();
+        window.api.stopCaptureInterval();
+
+        // Wrap the existing onstop to detect upload completion
+        await new Promise<void>((resolve) => {
+          const originalOnStop = mediaRecorder.onstop;
+          mediaRecorder.onstop = async (e: any) => {
+            try {
+              if (originalOnStop) await (originalOnStop as any)(e);
+            } catch (err) {
+              console.error('Error in original onstop:', err);
+            } finally {
+              resolve();
+            }
+          };
+          mediaRecorder.stop();
+        });
+
+        // Ahora que el upload (si hubo) terminó, avisar al backend para finalizar sesión
+        try {
+          await window.api.stopMonitoring();
+        } catch (err) {
+          console.error("Failed to stop monitoring:", err);
+        }
+      } catch (err) {
+        console.error('Error stopping capture:', err);
+      }
+
+      setIsRecording(false);
     } else {
+      // Start monitoring on the backend so logs are accepted and timer begins
+      try {
+        await window.api.startMonitoring();
+      } catch (err) {
+        console.error("Failed to start monitoring:", err);
+        // Continue locally but server may reject logs until monitoring is started
+      }
+
       window.api.startCaptureInterval();
       window.api.registerAllKeys();
       chunksRef.current = [];
       mediaRecorder.start(1000);
+      setIsRecording(true);
     }
-    setIsRecording(!isRecording);
   };
 
   const startMediaCapture = async () => {

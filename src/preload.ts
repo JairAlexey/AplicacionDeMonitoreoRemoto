@@ -10,6 +10,8 @@ const registry: CallbackRegistry = {
   isProxySetup: true,
   registerAllKeys: true,
   unregisterAllKeys: true,
+  startMonitoring: true,
+  stopMonitoring: true,
   captureDesktop: true,
   getScreenInfo: true,
   startCaptureInterval: true,

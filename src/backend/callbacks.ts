@@ -28,6 +28,40 @@ export const stopProxy = async () => {
   console.log(`Proxy setup status after stopping: ${proxySetup}`);
 };
 
+export const startMonitoring = async () => {
+  try {
+    if (!eventKey) throw new Error('No event key');
+    const base = process.env['SIX_API_BASE_URL'] || 'http://127.0.0.1:8000';
+    const res = await fetch(`${base}/proxy/start-monitoring/`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${eventKey}`,
+      },
+    });
+    return res.ok;
+  } catch (error) {
+    console.error('startMonitoring error:', error);
+    return false;
+  }
+};
+
+export const stopMonitoring = async () => {
+  try {
+    if (!eventKey) throw new Error('No event key');
+    const base = process.env['SIX_API_BASE_URL'] || 'http://127.0.0.1:8000';
+    const res = await fetch(`${base}/proxy/stop-monitoring/`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${eventKey}`,
+      },
+    });
+    return res.ok;
+  } catch (error) {
+    console.error('stopMonitoring error:', error);
+    return false;
+  }
+};
+
 export const isProxySetup = async (): Promise<boolean> => {
   if (!currentProxyPort) return false;
 
