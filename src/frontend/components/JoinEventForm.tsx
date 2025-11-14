@@ -19,13 +19,18 @@ const JoinEventForm = ({
         onJoined(eventKey);
       } else {
         setShowToast(true);
-        setToastMessage(
-          verification.isValid ? "Event is not active" : "Invalid event key",
-        );
+        // Usar el mensaje específico del backend si está disponible
+        if (verification.error && verification.specificError) {
+          setToastMessage(verification.error);
+        } else if (verification.isValid) {
+          setToastMessage("El evento no está activo en este momento");
+        } else {
+          setToastMessage("Clave de evento inválida");
+        }
       }
     } catch (err) {
       setShowToast(true);
-      setToastMessage("Server connection error");
+      setToastMessage("Error de conexión con el servidor");
     } finally {
     }
   };
@@ -43,7 +48,7 @@ const JoinEventForm = ({
         <div className="flex flex-col gap-1">
           <label htmlFor="eventId" className="flex items-center">
             <FaKey className="mr-2" />
-            Event ID:
+            ID del Evento:
           </label>
           <input
             name="eventId"

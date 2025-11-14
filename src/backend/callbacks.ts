@@ -103,16 +103,31 @@ export const verifyEventKey = async (_eventKey: string) => {
       },
     );
 
-    if (!response.ok) return { isValid: false, dateIsValid: false };
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      return { 
+        isValid: false, 
+        dateIsValid: false,
+        error: errorData.error,
+        specificError: errorData.specificError
+      };
+    }
     const data = await response.json();
     return {
       isValid: data.isValid,
       dateIsValid: data.dateIsValid,
       participant: data.participant,
       event: data.event,
+      error: data.error,
+      specificError: data.specificError
     };
   } catch (error) {
-    return { isValid: false, dateIsValid: false };
+    return { 
+      isValid: false, 
+      dateIsValid: false,
+      error: "Error de conexión con el servidor",
+      specificError: false
+    };
   }
 };
 
