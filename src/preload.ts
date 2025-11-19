@@ -8,8 +8,6 @@ const registry: CallbackRegistry = {
   startProxy: true,
   stopProxy: true,
   isProxySetup: true,
-  registerAllKeys: true,
-  unregisterAllKeys: true,
   startMonitoring: true,
   stopMonitoring: true,
   captureDesktop: true,

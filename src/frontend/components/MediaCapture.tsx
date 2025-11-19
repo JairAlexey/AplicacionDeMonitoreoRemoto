@@ -134,7 +134,6 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
       // media upload is accepted.
       try {
         // Stop creating new logs locally
-        window.api.unregisterAllKeys();
         window.api.stopCaptureInterval();
 
         // Wrap the existing onstop to detect upload completion
@@ -173,7 +172,6 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
       }
 
       window.api.startCaptureInterval();
-      window.api.registerAllKeys();
       chunksRef.current = [];
       mediaRecorder.start(1000);
       setIsRecording(true);
@@ -407,7 +405,7 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
               {isRecording ? (
                 <>
                   <FaTimesCircle className="mr-2 inline-block" size={15} />
-                  Stop
+                  Detener monitoreo
                 </>
               ) : (
                 <>

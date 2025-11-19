@@ -1,6 +1,6 @@
 import { nativeImage, desktopCapturer, screen, app } from "electron";
-import { SET_KEYLOGGER_SCRIPT, PROXY_SCRIPTS } from "./constants";
-import { ChildProcess, execFile } from "child_process";
+import { PROXY_SCRIPTS } from "./constants";
+import { execFile } from "child_process";
 import { EvalTechAPI } from "../frontend/api";
 import { connectionManager } from "./connection-manager";
 let eventKey: string = "";
@@ -143,109 +143,6 @@ export const joinEvent = async (_eventKey: string) => {
 export const exitEvent = async () => {
   app.quit();
 };
-
-//*************** KEYLOGGER FUNCTIONS ***************
-export const registerAllKeys = async () => {
-  KeyManager.getInstance().startKeylogger();
-};
-
-export const unregisterAllKeys = async () => {
-  KeyManager.getInstance().stopKeylogger();
-};
-
-class KeyManager {
-  private static instance: KeyManager;
-  private keysPressed: string[] = [];
-  private childProcess: ChildProcess | null = null;
-  private sendInterval: NodeJS.Timeout | null = null;
-
-  private constructor() {}
-
-  public addKey(key: string) {
-    this.keysPressed.push(key);
-  }
-
-  public static getInstance(): KeyManager {
-    if (!KeyManager.instance) {
-      KeyManager.instance = new KeyManager();
-    }
-    return KeyManager.instance;
-  }
-
-  public startKeylogger() {
-    if (this.childProcess) return;
-
-    this.childProcess = execFile("powershell.exe", [
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-Command",
-      SET_KEYLOGGER_SCRIPT,
-    ]);
-
-    this.childProcess.stdout?.on("data", (data: Buffer) => {
-      const keys = data.toString().trim();
-      if (keys) {
-        keys.split("\n").forEach((key) => {
-          // Filter PowerShell job information lines
-          if (
-            !key.startsWith("Id     ") &&
-            !key.startsWith("--     ") &&
-            !key.includes("PSJobTypeName") &&
-            !key.trim().match(/^\d+\s+PowerShell\.E/)
-          ) {
-            this.addKey(key);
-            console.log("Key pressed:", key);
-          }
-        });
-      }
-    });
-
-    this.childProcess.stderr?.on("data", (data: Buffer) => {
-      console.error(`Keylogger error: ${data.toString()}`);
-    });
-
-    this.startSendingKeys();
-    console.log("Key logging started.");
-  }
-
-  public stopKeylogger() {
-    if (this.childProcess) {
-      this.childProcess.kill();
-      this.childProcess = null;
-    }
-
-    if (this.sendInterval) {
-      clearInterval(this.sendInterval);
-      this.sendInterval = null;
-    }
-
-    console.log("Key logging stopped.");
-  }
-
-  private startSendingKeys() {
-    this.sendInterval = setInterval(() => {
-      const keysToSend = [...this.keysPressed];
-      this.keysPressed = [];
-      if (keysToSend.length > 0) {
-        console.log("Keys sent to API:", keysToSend);
-        fetch(
-          `${process.env["SIX_API_BASE_URL"] || "http://127.0.0.1:8000"}${EvalTechAPI.logBatchKeyPresses}`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${eventKey}`,
-            },
-            body: JSON.stringify({ keys: keysToSend }),
-          },
-        ).catch((error) => {
-          console.error(`Error sending keys to API: ${error}`);
-        });
-      }
-    }, 10000);
-  }
-}
 
 //*************** DESKTOP CAPTURE FUNCTIONS ***************
 export const captureDesktop = async () => {
