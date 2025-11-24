@@ -25,7 +25,7 @@ const createWindow = () => {
     width: winWidth,
     height: winHeight,
     resizable: true, // Permite cambiar tamaño
-    frame: true, // Muestra los botones de ventana (min, max, close)
+    // frame: true, // Muestra los botones de ventana (min, max, close)
     movable: true, // Permite mover la ventana
     alwaysOnTop: false, // Ya no forzamos que esté siempre encima
     x: width - winWidth - margin,

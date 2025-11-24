@@ -28,6 +28,7 @@ type EventStatus = {
   event?: {
     name: string;
   };
+  
 };
 
 const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
@@ -386,7 +387,10 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
           <div className="mt-6 flex w-full gap-2">
             <button
               onClick={handleExitActivity}
-              className="flex w-full items-center justify-center rounded-lg bg-red-500 py-2 text-xs text-white transition-colors hover:bg-red-600"
+              disabled={isRecording}
+              className={`flex w-full items-center justify-center rounded-lg py-2 text-xs text-white transition-colors
+                ${isRecording ? "bg-gray-400 cursor-not-allowed" : "bg-red-500 hover:bg-red-600"}
+                `}
             >
               <FaBackspace className="mr-2" size={15} />
               Regresar
