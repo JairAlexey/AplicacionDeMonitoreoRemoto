@@ -16,6 +16,7 @@ const registry: CallbackRegistry = {
   stopCaptureInterval: true,
   uploadMedia: true,
   verifyEventKey: true,
+  minimizeWindow: true,
 };
 
 const handlersMappedToIpcRenderer = Object.entries(registry)

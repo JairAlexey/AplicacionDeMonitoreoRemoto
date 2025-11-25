@@ -9,7 +9,10 @@ import {
   FaRegPlayCircle,
   FaBackspace,
   FaTimes,
+  FaSyncAlt,
 } from "react-icons/fa";
+import CustomTitleBar from "./ui/CustomTitleBar";
+import guiaRostro from '../assets/images/guia.png';
 
 type JoinEventFormProps = {
   eventKey: string;
@@ -90,32 +93,122 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
   // Device and permission verification
   const checkMediaAccess = async () => {
     try {
-      const devices = await navigator.mediaDevices.enumerateDevices();
+      // Si ya tenemos un stream activo y funcionando, verificar su estado
+      if (streamRef.current && streamRef.current.active) {
+        const videoTracks = streamRef.current.getVideoTracks();
+        const audioTracks = streamRef.current.getAudioTracks();
+        
+        setHasCameraAccess(videoTracks.length > 0 && videoTracks[0]?.readyState === "live");
+        setHasMicrophoneAccess(audioTracks.length > 0 && audioTracks[0]?.readyState === "live");
+      } else {
+        // No hay stream activo, intentar crear uno de prueba para verificar disponibilidad real
+        let testStream: MediaStream | null = null;
+        try {
+          // Intentar acceder a los dispositivos
+          testStream = await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: true,
+          });
 
-      const cameraPermission = await navigator.permissions.query({
-        name: "camera" as PermissionName,
-      });
-      const hasCamera =
-        cameraPermission.state === "granted" &&
-        devices.some((d) => d.kind === "videoinput" && d.label !== "");
+          // Si llegamos aquí, los dispositivos están disponibles y no están siendo usados
+          setHasCameraAccess(true);
+          setHasMicrophoneAccess(true);
 
-      const micPermission = await navigator.permissions.query({
-        name: "microphone" as PermissionName,
-      });
-      const hasMic =
-        micPermission.state === "granted" &&
-        devices.some((d) => d.kind === "audioinput" && d.label !== "");
+          // Liberar el stream de prueba inmediatamente
+          testStream.getTracks().forEach((track) => track.stop());
+        } catch (deviceError: any) {
+          console.error("Error accediendo a dispositivos:", deviceError);
+          
+          // Verificar el tipo de error
+          if (deviceError.name === "NotReadableError" || 
+              deviceError.name === "TrackStartError" ||
+              deviceError.message?.includes("Could not start video source") ||
+              deviceError.message?.includes("requested device not found")) {
+            // La cámara/micrófono está siendo usada por otra aplicación o no está disponible
+            console.warn("Dispositivos en uso por otra aplicación o no disponibles");
+            setHasCameraAccess(false);
+            setHasMicrophoneAccess(false);
+          } else if (deviceError.name === "NotAllowedError" || deviceError.name === "PermissionDeniedError") {
+            // Permiso denegado
+            console.warn("Permiso de dispositivos denegado");
+            setHasCameraAccess(false);
+            setHasMicrophoneAccess(false);
+          } else {
+            // Otro tipo de error - asumir que no están disponibles
+            console.warn("Error desconocido al acceder a dispositivos:", deviceError.name);
+            setHasCameraAccess(false);
+            setHasMicrophoneAccess(false);
+          }
 
+          // Limpiar si hay algún track
+          if (testStream) {
+            testStream.getTracks().forEach((track) => track.stop());
+          }
+        }
+      }
+
+      // Verificar pantalla
       const screenInfo = await window.api.getScreenInfo();
       setDisplayCount(screenInfo.displayCount);
       setHasScreenAccess(screenInfo.hasPermission);
 
-      setHasCameraAccess(hasCamera);
-      setHasMicrophoneAccess(hasMic);
     } catch (error) {
       console.error("Error verificando dispositivos:", error);
       setHasCameraAccess(false);
       setHasMicrophoneAccess(false);
+    }
+  };
+
+  // Recargar y verificar todo: permisos y conexión proxy
+  const handleReload = async () => {
+    try {
+      // Mostrar estado de carga
+      setEventStatus(prev => ({
+        ...prev,
+        status: "Loading..."
+      }));
+
+      // Detener stream actual si existe
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+      }
+
+      // Verificar permisos de medios
+      await checkMediaAccess();
+
+      // Reiniciar captura de medios para mostrar el video nuevamente
+      await startMediaCapture();
+
+      // Reintentar conexión del proxy
+      const verification = await window.api.verifyEventKey(eventKey);
+      
+      if (verification) {
+        await window.api.startProxy();
+        const isProxyConnected = await window.api.isProxySetup();
+
+        setEventStatus({
+          name: verification.event.name || "Unknown Event",
+          status: isProxyConnected ? "Tracking" : "No tracking",
+          user: {
+            email: verification.participant.email,
+            name: verification.participant.name,
+          },
+        });
+      } else {
+        setEventStatus({
+          name: "Unknown Event",
+          status: "No tracking",
+          user: undefined,
+        });
+      }
+    } catch (error) {
+      console.error("Error recargando estado:", error);
+      setEventStatus({
+        name: "Unknown Event",
+        status: "No tracking",
+        user: undefined,
+      });
     }
   };
 
@@ -214,9 +307,25 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
       };
 
       setMediaRecorder(recorder);
-      await checkMediaAccess();
-    } catch (error) {
+      
+      // Como ya tenemos el stream activo, marcamos como disponible
+      setHasCameraAccess(true);
+      setHasMicrophoneAccess(true);
+    } catch (error: any) {
       console.error("Error accessing devices:", error);
+      
+      // Determinar el motivo del error y mostrar mensaje apropiado
+      if (error.name === "NotReadableError" || 
+          error.name === "TrackStartError" ||
+          error.message?.includes("Could not start video source") ||
+          error.message?.includes("requested device not found")) {
+        console.error("Dispositivos en uso por otra aplicación o no disponibles");
+      } else if (error.name === "NotAllowedError" || error.name === "PermissionDeniedError") {
+        console.error("Permiso de dispositivos denegado por el usuario");
+      } else {
+        console.error("Error desconocido:", error.name, error.message);
+      }
+      
       setHasCameraAccess(false);
       setHasMicrophoneAccess(false);
     }
@@ -279,26 +388,28 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
   };
 
   return (
-    <div className="mt-4 bg-gray-800">
-      <div className="flex h-screen w-full items-center justify-center">
-        {/* Unified main container */}
-        <div className="w-full max-w-2xl">
-          <div className="relative inline-block">
+    <div className="fixed inset-0 w-screen h-screen flex flex-col bg-gray-800">
+      <CustomTitleBar title="Sistema de Monitoreo - Captura de Medios" />
+      <div className="flex-1 overflow-auto">
+        <div className="flex h-full w-full items-center justify-center p-4">
+          {/* Unified main container */}
+          <div className="w-full max-w-[260px] mx-auto">
+          <div className="relative w-full">
             {/* Centered label */}
-            <div className="absolute top-0 left-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center gap-1 rounded-full border border-gray-600 bg-gray-800 px-3 py-1 text-xs whitespace-nowrap text-white">
+            <div className="absolute top-0 left-1/2 flex -translate-x-1/2 -translate-y-1/2 items-center gap-1 rounded-full border border-gray-600 bg-gray-800 px-3 py-1 text-xs whitespace-nowrap text-white z-30">
               <span>{eventStatus.name || "Event Loading..."}</span>
               {renderStatusIcon(eventStatus?.status || "")}
             </div>
 
             {/* Event details overlay */}
             {showEventDetails && (
-              <div className="absolute top-0 left-0 z-20 h-full w-full rounded-xl bg-gray-800/90 p-4 backdrop-blur-sm">
+              <div className="absolute top-0 left-0 z-20 h-full w-full rounded-xl bg-gray-800/95 p-3 backdrop-blur-sm">
                 <div className="relative h-full text-xs text-white">
                   <button
                     onClick={() => setShowEventDetails(false)}
-                    className="absolute top-2 right-2 rounded-full p-1 hover:bg-gray-700"
+                    className="absolute top-1 right-1 rounded-full p-1.5 hover:bg-gray-700 transition-colors"
                   >
-                    <FaTimes size={16} />
+                    <FaTimes size={14} />
                   </button>
                   <h2 className="mb-4 text-center">Event Details</h2>
                   <div className="space-y-3">
@@ -328,17 +439,36 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
               </div>
             )}
 
-            <div className="rounded-xl border-2 border-gray-600">
-              <video ref={videoRef} autoPlay muted className="rounded-xl" />
+            <div className="rounded-xl border-2 border-gray-600 overflow-hidden relative">
+              <video ref={videoRef} autoPlay muted className="rounded-xl w-full h-auto" />
+              
+              {/* Guía de rostro superpuesta */}
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <img 
+                  src={guiaRostro} 
+                  alt="Guía de posicionamiento" 
+                  className="w-[90%] h-[90%] object-contain opacity-40"
+                />
+              </div>
             </div>
 
             {/* Top-left info button */}
-            <div className="absolute top-3 left-2 z-10">
+            <div className="absolute top-2 left-2 z-10">
               <button
                 onClick={() => setShowEventDetails(!showEventDetails)}
-                className="rounded-full border border-gray-600 bg-gray-800/80 p-1.5 text-white backdrop-blur-sm transition-colors hover:bg-gray-700/90"
+                className="rounded-full border border-gray-600 bg-gray-800/80 p-1.5 text-white backdrop-blur-sm transition-all hover:bg-gray-700/90 hover:scale-110"
               >
-                <FaInfoCircle size={14} />
+                <FaInfoCircle size={12} />
+              </button>
+            </div>
+
+            {/* Top-right reload button */}
+            <div className="absolute top-2 right-2 z-10">
+              <button
+                onClick={handleReload}
+                className="rounded-full border border-gray-600 bg-gray-800/80 p-1.5 text-white backdrop-blur-sm transition-all hover:bg-gray-700/90 hover:scale-110"
+              >
+                <FaSyncAlt size={12} />
               </button>
             </div>
 
@@ -384,41 +514,42 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
           </div>
 
           {/* Action Buttons */}
-          <div className="mt-6 flex w-full gap-2">
-            <button
-              onClick={handleExitActivity}
-              disabled={isRecording}
-              className={`flex w-full items-center justify-center rounded-lg py-2 text-xs text-white transition-colors
-                ${isRecording ? "bg-gray-400 cursor-not-allowed" : "bg-red-500 hover:bg-red-600"}
-                `}
-            >
-              <FaBackspace className="mr-2" size={15} />
-              Regresar
-            </button>
+          <div className="mt-4 flex w-full flex-col gap-2">
             <button
               onClick={toggleRecording}
               disabled={
-                !hasCameraAccess || !hasMicrophoneAccess || !hasScreenAccess
+                !hasCameraAccess || !hasMicrophoneAccess || !hasScreenAccess || eventStatus.status === "No tracking"
               }
-              className={`w-full rounded-lg py-2 text-xs transition-colors ${
+              className={`w-full rounded-md py-2 px-3 text-sm font-semibold transition-all transform flex items-center justify-center gap-2 shadow-lg ${
                 isRecording
-                  ? "bg-red-500 text-white hover:bg-red-600"
-                  : "bg-blue-500 text-white hover:bg-blue-600"
-              } ${(!hasCameraAccess || !hasMicrophoneAccess || !hasScreenAccess) && "cursor-not-allowed opacity-50"}`}
+                  ? "bg-red-600 text-white hover:bg-red-700 hover:scale-105"
+                  : "bg-blue-600 text-white hover:bg-blue-700 hover:scale-105"
+              } ${(!hasCameraAccess || !hasMicrophoneAccess || !hasScreenAccess || eventStatus.status === "No tracking") && "cursor-not-allowed opacity-50 hover:scale-100"}`}
             >
               {isRecording ? (
                 <>
-                  <FaTimesCircle className="mr-2 inline-block" size={15} />
+                  <FaTimesCircle size={14} />
                   Detener monitoreo
                 </>
               ) : (
                 <>
-                  <FaRegPlayCircle className="mr-2 inline-block" size={15} />
+                  <FaRegPlayCircle size={14} />
                   Empezar monitoreo
                 </>
               )}
             </button>
+            <button
+              onClick={handleExitActivity}
+              disabled={isRecording}
+              className={`w-full rounded-md py-2 px-3 text-sm font-semibold transition-all transform flex items-center justify-center gap-2 shadow-lg
+                ${isRecording ? "bg-gray-500 cursor-not-allowed opacity-50" : "bg-gray-600 text-white hover:bg-gray-700 hover:scale-105"}
+                `}
+            >
+              <FaBackspace size={14} />
+              Regresar
+            </button>
           </div>
+        </div>
         </div>
       </div>
     </div>

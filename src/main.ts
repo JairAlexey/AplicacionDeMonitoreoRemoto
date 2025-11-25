@@ -17,15 +17,15 @@ const createWindow = () => {
   const primaryDisplay = screen.getPrimaryDisplay();
   const { width, height } = primaryDisplay.workAreaSize;
 
-  const winWidth = 400;
-  const winHeight = 400;
-  const margin = 25;
+  const winWidth = 330;
+  const winHeight = 390;
+  const margin = 5;
 
   const mainWindow = new BrowserWindow({
     width: winWidth,
     height: winHeight,
     resizable: true, // Permite cambiar tamaño
-    // frame: true, // Muestra los botones de ventana (min, max, close)
+    frame: false, // Muestra los botones de ventana (min, max, close)
     movable: true, // Permite mover la ventana
     alwaysOnTop: false, // Ya no forzamos que esté siempre encima
     x: width - winWidth - margin,

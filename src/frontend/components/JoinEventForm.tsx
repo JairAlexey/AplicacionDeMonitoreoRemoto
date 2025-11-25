@@ -1,6 +1,8 @@
 import React, { useState } from "react";
-import { FaKey, FaSignOutAlt, FaSignInAlt } from "react-icons/fa";
+import { FaSignInAlt } from "react-icons/fa";
 import Toast from "./ui/ToastNotification";
+import CustomTitleBar from "./ui/CustomTitleBar";
+import logo from '../assets/images/logo.png';
 
 const JoinEventForm = ({
   onJoined,
@@ -35,45 +37,44 @@ const JoinEventForm = ({
     }
   };
 
-  const exitEvent = async () => {
-    await window.api.exitEvent();
-  };
-
   return (
-    <div className="flex w-full max-w-xs flex-col text-xs text-white">
-      <div className="mb-4 flex items-center justify-center text-sm">
-        <h1>Aplicacion de Monitoreo</h1>
-      </div>
-      <div className="flex flex-col gap-2">
-        <div className="flex flex-col gap-1">
-          <label htmlFor="eventId" className="flex items-center">
-            <FaKey className="mr-2" />
-            ID del Evento:
+    <div className="fixed inset-0 w-screen h-screen flex flex-col bg-gray-800">
+      <CustomTitleBar title="Sistema de Monitoreo - Iniciar Sesión" />
+      
+      <div className="flex-1 flex flex-col justify-center p-4">
+        {/* Logo y título */}
+        <div className="text-center mb-4">
+          <div className="w-24 h-24 bg-gray-600 rounded-full flex items-center justify-center mx-auto mb-2 shadow-lg">
+            <img src={logo} alt="Logo" className="w-18 h-18 object-contain" />
+          </div>
+            <h1 className="text-lg font-bold text-white mb-1">Acceso al Sistema</h1>
+            <p className="text-xs text-gray-300">Monitoreo de Evaluaciones Técnicas</p>
+        </div>
+
+        {/* Campo de Event Key */}
+        <div className="mb-4">
+            <label htmlFor="eventKey" className="block text-xs font-medium text-gray-200 mb-1">
+            Clave del Evento
           </label>
           <input
-            name="eventId"
+            id="eventKey"
             type="text"
-            className="h-10 rounded border border-zinc-400 px-3 text-gray-300 focus:ring-2 focus:ring-blue-300 focus:outline-none"
+            placeholder="Ingrese la clave del evento"
+            className="w-full px-3 py-2 border border-gray-600 bg-gray-700 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none text-sm text-white placeholder-gray-400 transition-all"
             onChange={(e) => setEventKey(e.target.value)}
             value={eventKey}
           />
         </div>
-        <div className="mt-2 flex w-full gap-2">
-          <button
-            onClick={exitEvent}
-            className="flex w-full items-center justify-center rounded-lg bg-red-500 py-2 text-white transition-colors hover:bg-red-600"
-          >
-            <FaSignOutAlt className="mr-2" size={15} />
-            Cerrar
-          </button>
-          <button
-            onClick={handleJoin}
-            className="flex w-full items-center justify-center rounded-lg bg-blue-500 py-2 text-white transition-colors hover:bg-blue-600"
-          >
-            <FaSignInAlt className="mr-2" size={15} />
-            Unirse
-          </button>
-        </div>
+
+        {/* Botón de Unirse */}
+        <button
+          onClick={handleJoin}
+          className="w-full bg-blue-600 text-white py-2 px-3 rounded-md text-sm font-semibold hover:bg-blue-700 transition-all transform hover:scale-105 flex items-center justify-center gap-2 shadow-lg"
+        >
+          <FaSignInAlt size={14} />
+          Iniciar Sesión
+        </button>
+
         {showToast && (
           <Toast
             message={toastMessage}

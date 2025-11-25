@@ -1,4 +1,4 @@
-import { nativeImage, desktopCapturer, screen, app } from "electron";
+import { nativeImage, desktopCapturer, screen, app, BrowserWindow } from "electron";
 import { PROXY_SCRIPTS } from "./constants";
 import { execFile } from "child_process";
 import { EvalTechAPI } from "../frontend/api";
@@ -142,6 +142,14 @@ export const joinEvent = async (_eventKey: string) => {
 
 export const exitEvent = async () => {
   app.quit();
+};
+
+//*************** WINDOW CONTROL FUNCTIONS ***************
+export const minimizeWindow = () => {
+  const window = BrowserWindow.getFocusedWindow();
+  if (window) {
+    window.minimize();
+  }
 };
 
 //*************** DESKTOP CAPTURE FUNCTIONS ***************

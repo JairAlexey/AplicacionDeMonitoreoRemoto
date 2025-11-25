@@ -22,3 +22,13 @@
 .animate-toast-slide-in {
   animation: toastSlideIn 3s ease-in-out forwards;
 }
+
+/* Custom title bar styles */
+.drag-region {
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+}
