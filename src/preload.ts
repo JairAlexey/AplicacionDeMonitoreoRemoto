@@ -1,8 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 
-type CallbackRegistry = Record<keyof typeof window.api, boolean>;
-
-const registry: CallbackRegistry = {
+const registry = {
   joinEvent: true,
   exitEvent: true,
   startProxy: true,
@@ -36,4 +34,12 @@ const handlersMappedToIpcRenderer = Object.entries(registry)
     >,
   );
 
-contextBridge.exposeInMainWorld("api", handlersMappedToIpcRenderer);
+// onAppClosing no es un callback IPC normal, es un listener de eventos
+const onAppClosing = (callback: () => void) => {
+  ipcRenderer.on('app-closing', callback);
+};
+
+contextBridge.exposeInMainWorld("api", {
+  ...handlersMappedToIpcRenderer,
+  onAppClosing,
+});

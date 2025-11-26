@@ -6,7 +6,7 @@ import {
   session,
 } from "electron";
 import path from "node:path";
-import { callbacks } from "./backend";
+import { callbacks, globalCleanup } from "./backend";
 import { config } from "dotenv";
 
 config();
@@ -54,6 +54,25 @@ const createWindow = () => {
   //   activate: false,
   //   mode: "detach",
   // });
+
+  // Manejar el cierre de ventana
+  let isClosing = false;
+  mainWindow.on('close', async (e) => {
+    if (!isClosing && !mainWindow.isDestroyed()) {
+      e.preventDefault();
+      isClosing = true;
+      
+      console.log('[MAIN] Ventana cerrando - ejecutando cleanup');
+      
+      // Ejecutar cleanup inmediatamente
+      await globalCleanup();
+      
+      // Cerrar la ventana
+      if (!mainWindow.isDestroyed()) {
+        mainWindow.destroy();
+      }
+    }
+  });
 };
 app.on("ready", () => {
   createWindow();
@@ -78,6 +97,19 @@ app.whenReady().then(() => {
   );
 });
 
+// Evento before-quit como respaldo (por si close no se ejecuta)
+app.on('before-quit', async (e) => {
+  e.preventDefault();
+  console.log('[MAIN] before-quit - ejecutando cleanup');
+  
+  await globalCleanup();
+  
+  // Pequeña espera para requests HTTP
+  await new Promise(resolve => setTimeout(resolve, 500));
+  
+  app.exit(0);
+});
+
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     app.quit();
@@ -90,7 +122,9 @@ app.on("activate", () => {
   }
 });
 
-Object.entries(callbacks).forEach(([functionName, functionHandler]) => {
+// Registrar callbacks IPC
+const callbackEntries = Object.entries(callbacks).filter(([name]) => name !== 'globalCleanup');
+callbackEntries.forEach(([functionName, functionHandler]) => {
   ipcMain.handle(functionName, async (event, ...args: unknown[]) => {
     args.push(event);
     return await (

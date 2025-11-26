@@ -42,7 +42,6 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
   );
   const [isRecording, setIsRecording] = useState(false);
   const streamRef = useRef<MediaStream | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
 
   const [showEventDetails, setShowEventDetails] = useState(false);
 
@@ -216,21 +215,21 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
     return await blob.arrayBuffer();
   };
 
-  const toggleRecording = async () => {
-    if (!mediaRecorder) {
-      console.error("MediaRecorder not initialized");
+  // Función compartida para detener el monitoreo (usada tanto manualmente como automáticamente)
+  const stopRecording = async () => {
+    if (!mediaRecorder || !isRecording) {
       return;
     }
 
-    if (isRecording) {
-      // Stop capture first and wait until the onstop handler (which uploads media)
-      // completes. Only then notify backend to stop monitoring so the final
-      // media upload is accepted.
-      try {
-        // Stop creating new logs locally
-        window.api.stopCaptureInterval();
+    try {
+      // Stop creating new logs locally
+      window.api.stopCaptureInterval();
 
-        // Wrap the existing onstop to detect upload completion
+      // Si tiene la función personalizada de cleanup, usarla
+      if ((mediaRecorder as any).stopAndUpload) {
+        await (mediaRecorder as any).stopAndUpload();
+      } else {
+        // Fallback al comportamiento original
         await new Promise<void>((resolve) => {
           const originalOnStop = mediaRecorder.onstop;
           mediaRecorder.onstop = async (e: any) => {
@@ -242,33 +241,51 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
               resolve();
             }
           };
-          mediaRecorder.stop();
+          
+          if (mediaRecorder.state !== 'inactive') {
+            mediaRecorder.stop();
+          } else {
+            resolve();
+          }
         });
-
-        // Ahora que el upload (si hubo) terminó, avisar al backend para finalizar sesión
-        try {
-          await window.api.stopMonitoring();
-        } catch (err) {
-          console.error("Failed to stop monitoring:", err);
-        }
-      } catch (err) {
-        console.error('Error stopping capture:', err);
       }
 
-      setIsRecording(false);
+      // Ahora que el upload terminó, avisar al backend para finalizar sesión
+      try {
+        await window.api.stopMonitoring();
+      } catch (err) {
+        console.error("Failed to stop monitoring:", err);
+      }
+    } catch (err) {
+      console.error('Error stopping capture:', err);
+    }
+
+    setIsRecording(false);
+  };
+
+  const toggleRecording = async () => {
+    if (!mediaRecorder) {
+      console.error("MediaRecorder not initialized");
+      return;
+    }
+
+    if (isRecording) {
+      await stopRecording();
     } else {
-      // Start monitoring on the backend so logs are accepted and timer begins
+      // Iniciar monitoreo primero, luego la grabación
       try {
         await window.api.startMonitoring();
+        window.api.startCaptureInterval();
+        
+        // Solo iniciar grabación si el monitoreo se inició correctamente
+        if ((mediaRecorder as any).startCustomRecording) {
+          (mediaRecorder as any).startCustomRecording();
+        }
+        
+        console.log("Monitoreo y grabación iniciados");
       } catch (err) {
         console.error("Failed to start monitoring:", err);
-        // Continue locally but server may reject logs until monitoring is started
       }
-
-      window.api.startCaptureInterval();
-      chunksRef.current = [];
-      mediaRecorder.start(1000);
-      setIsRecording(true);
     }
   };
 
@@ -289,28 +306,145 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
         videoRef.current.srcObject = stream;
       }
 
-      const recorder = new MediaRecorder(stream, { mimeType });
+      // Monitorear el estado de los tracks en tiempo real
+      const videoTracks = stream.getVideoTracks();
+      const audioTracks = stream.getAudioTracks();
 
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) {
-          chunksRef.current.push(e.data);
+      // Listener para detectar cuando se detiene el video
+      videoTracks.forEach(track => {
+        track.onended = async () => {
+          console.warn("Video track terminado - cámara desconectada o en uso");
+          setHasCameraAccess(false);
+          // Detener monitoreo si estaba activo
+          await stopRecording();
+        };
+        
+        track.onmute = async () => {
+          console.warn("Video track muteado");
+          setHasCameraAccess(false);
+          // Detener monitoreo si estaba activo
+          await stopRecording();
+        };
+        
+        track.onunmute = () => {
+          console.log("Video track desmuteado");
+          setHasCameraAccess(true);
+        };
+      });
+
+      // Listener para detectar cuando se detiene el audio
+      audioTracks.forEach(track => {
+        track.onended = async () => {
+          console.warn("Audio track terminado - micrófono desconectado o en uso");
+          setHasMicrophoneAccess(false);
+          // Detener monitoreo si estaba activo
+          await stopRecording();
+        };
+        
+        track.onmute = async () => {
+          console.warn("Audio track muteado");
+          setHasMicrophoneAccess(false);
+          // Detener monitoreo si estaba activo
+          await stopRecording();
+        };
+        
+        track.onunmute = () => {
+          console.log("Audio track desmuteado");
+          setHasMicrophoneAccess(true);
+        };
+      });
+
+      let currentRecorder = new MediaRecorder(stream, { mimeType });
+      let uploadCounter = 0;
+      let recordingTimer: NodeJS.Timeout | null = null;
+      
+      // Función para finalizar grabación actual y subir video
+      const finishCurrentRecording = async () => {
+        return new Promise<void>((resolve) => {
+          if (!currentRecorder || currentRecorder.state === 'inactive') {
+            resolve();
+            return;
+          }
+          
+          uploadCounter++;
+          const currentUpload = uploadCounter;
+          console.log(`[VIDEO] Finalizando grabación #${currentUpload}`);
+          
+          // Listener para cuando se complete la grabación
+          const handleDataAvailable = async (e: BlobEvent) => {
+            currentRecorder.removeEventListener('dataavailable', handleDataAvailable);
+            
+            if (e.data.size > 0) {
+              try {
+                console.log(`[VIDEO] Video #${currentUpload} generado: ${(e.data.size / 1024).toFixed(2)} KB`);
+                
+                const arrayBuffer = await blobToArrayBuffer(e.data);
+                await window.api.uploadMedia(arrayBuffer);
+                
+                console.log(`[VIDEO] Upload #${currentUpload} completado exitosamente`);
+              } catch (error) {
+                console.error(`[VIDEO] Error en upload #${currentUpload}:`, error);
+              }
+            }
+            resolve();
+          };
+          
+          currentRecorder.addEventListener('dataavailable', handleDataAvailable);
+          currentRecorder.stop();
+        });
+      };
+      
+      // Función para iniciar nueva grabación
+      const startNewRecording = () => {
+        if (stream.active) {
+          currentRecorder = new MediaRecorder(stream, { mimeType });
+          currentRecorder.start();
+          console.log(`[VIDEO] Nueva grabación iniciada #${uploadCounter + 1}`);
+        }
+      };
+      
+      // Función para manejar el ciclo de grabaciones cada 5 minutos
+      const scheduleNextRecording = () => {
+        recordingTimer = setTimeout(async () => {
+          await finishCurrentRecording();
+          startNewRecording();
+          scheduleNextRecording(); // Programar la siguiente
+        }, 5 * 60 * 1000); // 5 minutos
+      };
+      
+      // Manejar finalización del monitoreo
+      const handleMonitoringStop = async () => {
+        console.log('[VIDEO] Deteniendo monitoreo...');
+        
+        // Cancelar timer de grabaciones futuras
+        if (recordingTimer) {
+          clearTimeout(recordingTimer);
+          recordingTimer = null;
+        }
+        
+        // Finalizar grabación actual
+        await finishCurrentRecording();
+        console.log('[VIDEO] Monitoreo detenido completamente');
+      };
+      
+      // Función para iniciar el ciclo de grabación (se llamará desde toggleRecording)
+      (currentRecorder as any).startCustomRecording = () => {
+        if (stream.active) {
+          currentRecorder.start();
+          console.log('[VIDEO] Primera grabación iniciada, ciclo cada 5 minutos');
+          scheduleNextRecording();
+          setIsRecording(true);
         }
       };
 
-      recorder.onstop = async () => {
-        if (chunksRef.current.length > 0) {
-          const blob = new Blob(chunksRef.current, { type: mimeType });
-          const arrayBuffer = await blobToArrayBuffer(blob);
-          await window.api.uploadMedia(arrayBuffer);
-          chunksRef.current = [];
-        }
-      };
-
-      setMediaRecorder(recorder);
+      // Guardar referencia para cleanup con función personalizada
+      (currentRecorder as any).stopAndUpload = handleMonitoringStop;
+      setMediaRecorder(currentRecorder);
       
       // Como ya tenemos el stream activo, marcamos como disponible
       setHasCameraAccess(true);
       setHasMicrophoneAccess(true);
+      console.log("MediaCapture initialized, ready to start recording");
     } catch (error: any) {
       console.error("Error accessing devices:", error);
       
@@ -330,6 +464,34 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
       setHasMicrophoneAccess(false);
     }
   };
+
+  // Efecto para monitorear permisos constantemente durante la grabación
+  useEffect(() => {
+    if (!isRecording) return;
+
+    const monitorInterval = setInterval(async () => {
+      // Verificar el estado actual de los tracks del stream
+      if (streamRef.current && streamRef.current.active) {
+        const videoTracks = streamRef.current.getVideoTracks();
+        const audioTracks = streamRef.current.getAudioTracks();
+        
+        const cameraActive = videoTracks.length > 0 && videoTracks[0]?.readyState === "live";
+        const micActive = audioTracks.length > 0 && audioTracks[0]?.readyState === "live";
+
+        // Si alguno de los permisos se perdió, detener el monitoreo
+        if (!cameraActive || !micActive) {
+          console.warn("Permisos perdidos durante la grabación - deteniendo monitoreo");
+          setHasCameraAccess(cameraActive);
+          setHasMicrophoneAccess(micActive);
+          await stopRecording();
+        }
+      }
+    }, 500); // Verificar cada 500ms
+
+    return () => {
+      clearInterval(monitorInterval);
+    };
+  }, [isRecording, mediaRecorder]);
 
   useEffect(() => {
     let cameraPermissionStatus: PermissionStatus;
@@ -351,17 +513,51 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
       }
     };
 
+    // Listener para detectar cuando se conectan/desconectan dispositivos
+    const handleDeviceChange = async () => {
+      console.log("Cambio en dispositivos detectado");
+      await checkMediaAccess();
+    };
+
+    // Agregar listener de cambios en dispositivos
+    navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
+
+    // Listener para el cierre de la aplicación - NO HACE NADA
+    // El cleanup se maneja en el main process
+    const handleAppClosing = () => {
+      console.log("[RENDERER] App closing signal recibido");
+      // El main process ya se encarga de todo el cleanup
+    };
+
+    if (window.api.onAppClosing) {
+      window.api.onAppClosing(handleAppClosing);
+    }
+
     checkMediaAccess();
     setupPermissions();
     startMediaCapture();
 
     return () => {
-      mediaRecorder?.stop();
+      // Cleanup al desmontar el componente
+      if (mediaRecorder) {
+        try {
+          window.api.stopCaptureInterval();
+          if (mediaRecorder.state !== 'inactive') {
+            mediaRecorder.stop();
+          }
+        } catch (err) {
+          console.error("Error en cleanup:", err);
+        }
+      }
+      
       streamRef.current?.getTracks().forEach((track) => track.stop());
+      window.api.stopProxy();
+      
       cameraPermissionStatus?.onchange &&
         (cameraPermissionStatus.onchange = null);
       microphonePermissionStatus?.onchange &&
         (microphonePermissionStatus.onchange = null);
+      navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange);
     };
   }, []);
 
@@ -518,13 +714,14 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
             <button
               onClick={toggleRecording}
               disabled={
-                !hasCameraAccess || !hasMicrophoneAccess || !hasScreenAccess || eventStatus.status === "No tracking"
+                // Solo deshabilitar para EMPEZAR si no hay permisos, pero siempre permitir DETENER
+                !isRecording && (!hasCameraAccess || !hasMicrophoneAccess || !hasScreenAccess || eventStatus.status === "No tracking")
               }
               className={`w-full rounded-md py-2 px-3 text-sm font-semibold transition-all transform flex items-center justify-center gap-2 shadow-lg ${
                 isRecording
                   ? "bg-red-600 text-white hover:bg-red-700 hover:scale-105"
                   : "bg-blue-600 text-white hover:bg-blue-700 hover:scale-105"
-              } ${(!hasCameraAccess || !hasMicrophoneAccess || !hasScreenAccess || eventStatus.status === "No tracking") && "cursor-not-allowed opacity-50 hover:scale-100"}`}
+              } ${(!isRecording && (!hasCameraAccess || !hasMicrophoneAccess || !hasScreenAccess || eventStatus.status === "No tracking")) && "cursor-not-allowed opacity-50 hover:scale-100"}`}
             >
               {isRecording ? (
                 <>

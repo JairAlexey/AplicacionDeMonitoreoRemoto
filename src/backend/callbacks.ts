@@ -5,6 +5,32 @@ import { EvalTechAPI } from "../frontend/api";
 import { connectionManager } from "./connection-manager";
 let eventKey: string = "";
 let currentProxyPort: number | null = null;
+let isMonitoringActive: boolean = false;
+
+// Función global de cleanup - ejecuta durante el cierre de la app
+export const globalCleanup = async () => {
+  console.log("[CLEANUP] Iniciando cleanup global");
+  try {
+    // Detener capturas de pantalla
+    stopCaptureInterval();
+    
+    // Detener monitoreo si está activo
+    if (isMonitoringActive && eventKey) {
+      console.log("[CLEANUP] Deteniendo monitoreo");
+      await stopMonitoring();
+    }
+    
+    // Detener proxy
+    if (currentProxyPort) {
+      console.log("[CLEANUP] Deteniendo proxy");
+      await stopProxy();
+    }
+    
+    console.log("[CLEANUP] Completado exitosamente");
+  } catch (error) {
+    console.error("[CLEANUP] Error:", error);
+  }
+};
 
 //*************** PROXY FUNCTIONS ***************
 export const startProxy = async () => {
@@ -38,6 +64,10 @@ export const startMonitoring = async () => {
         Authorization: `Bearer ${eventKey}`,
       },
     });
+    if (res.ok) {
+      isMonitoringActive = true;
+      console.log('Monitoreo iniciado - estado guardado');
+    }
     return res.ok;
   } catch (error) {
     console.error('startMonitoring error:', error);
@@ -55,6 +85,10 @@ export const stopMonitoring = async () => {
         Authorization: `Bearer ${eventKey}`,
       },
     });
+    if (res.ok) {
+      isMonitoringActive = false;
+      console.log('Monitoreo detenido - estado guardado');
+    }
     return res.ok;
   } catch (error) {
     console.error('stopMonitoring error:', error);
@@ -179,11 +213,13 @@ export const captureDesktop = async () => {
       );
 
       const buffer = image.toPNG();
+      // Convert Node Buffer to Uint8Array for Blob constructor
+      const uint8Array = new Uint8Array(buffer);
 
       const formData = new FormData();
       formData.append(
         "screenshot",
-        new Blob([buffer], { type: "image/png" }),
+        new Blob([uint8Array], { type: "image/png" }),
         "screenshot.png",
       );
 
@@ -274,11 +310,18 @@ export const stopCaptureInterval = () => {
 //*************** MEDIA FUNCTIONS ***************
 export const uploadMedia = async (data: ArrayBuffer) => {
   try {
+    console.log(`[UPLOAD] Iniciando upload de ${(data.byteLength / 1024).toFixed(2)} KB`);
+    
     // Create Blob directly from ArrayBuffer
-    const blob = new Blob([data], { type: "video/webm" });
+    // Use slice to ensure we have a fresh copy and avoid transfer issues
+    const blob = new Blob([data.slice(0)], { type: "video/webm" });
+    
+    // Generar nombre único con timestamp para identificar cada segmento
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = `recording_${timestamp}.webm`;
 
     const formData = new FormData();
-    formData.append("media", blob, "recording.webm");
+    formData.append("media", blob, filename);
 
     const response = await fetch(
       `${process.env["SIX_API_BASE_URL"] || "http://127.0.0.1:8000"}${EvalTechAPI.mediaCapture}`,
@@ -291,9 +334,14 @@ export const uploadMedia = async (data: ArrayBuffer) => {
       },
     );
 
-    if (!response.ok) throw new Error("Error uploading media");
-    console.log("Media sent successfully");
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Upload failed: ${response.status} - ${errorText}`);
+    }
+    
+    console.log(`[UPLOAD] Video segment sent: ${filename} (${(blob.size / 1024).toFixed(2)} KB)`);
   } catch (error) {
-    console.error("Error:", error);
+    console.error("[UPLOAD] Error:", error);
+    throw error; // Re-lanzar para que el caller lo maneje
   }
 };
