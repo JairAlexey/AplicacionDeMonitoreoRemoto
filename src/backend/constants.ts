@@ -27,3 +27,35 @@ export const SCRIPTS = {
     IS_PROXY_CONNECTED: PROXY_SCRIPTS,
   },
 };
+
+// Constantes para el proxy local
+export const LOCAL_PROXY_CONFIG = {
+  DEFAULT_PORT: 8888,
+  DEFAULT_HOST: 'localhost',
+  VALIDATION_TIMEOUT: 10000, // 10 segundos
+  MAX_RETRIES: 3,
+  RETRY_DELAY: 1000, // 1 segundo
+};
+
+// URLs de la API para diferentes entornos
+export const API_ENDPOINTS = {
+  DEVELOPMENT: {
+    BASE_URL: 'http://127.0.0.1:8000',
+    PROXY_AUTH: '/proxy/auth-http/',
+    PROXY_VALIDATE: '/proxy/validate/',
+    PROXY_DISCONNECT: '/proxy/disconnect-http/',
+  },
+  PRODUCTION: {
+    BASE_URL: process.env['SIX_API_BASE_URL'] || 'https://api.evaltech.com',
+    PROXY_AUTH: '/proxy/auth-http/',
+    PROXY_VALIDATE: '/proxy/validate/',
+    PROXY_DISCONNECT: '/proxy/disconnect-http/',
+  },
+};
+
+// Función helper para obtener configuración de API
+export const getApiConfig = () => {
+  const isDevelopment = process.env['NODE_ENV'] === 'development' || 
+                        !process.env['SIX_API_BASE_URL'];
+  return isDevelopment ? API_ENDPOINTS.DEVELOPMENT : API_ENDPOINTS.PRODUCTION;
+};

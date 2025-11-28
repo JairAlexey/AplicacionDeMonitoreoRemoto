@@ -6,6 +6,7 @@ const registry = {
   startProxy: true,
   stopProxy: true,
   isProxySetup: true,
+  unsetProxySettings: true,
   startMonitoring: true,
   stopMonitoring: true,
   captureDesktop: true,

@@ -58,6 +58,10 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
     user: undefined,
   });
 
+
+
+
+
   // Initial event and proxy verification
   useEffect(() => {
     const initializeProxy = async () => {
@@ -76,6 +80,8 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
               name: verification.participant.name,
             },
           });
+          
+
         }
       } catch (error) {
         setEventStatus({
@@ -88,6 +94,8 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
 
     initializeProxy();
   }, [eventKey]);
+
+
 
   // Device and permission verification
   const checkMediaAccess = async () => {
@@ -274,17 +282,26 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
     } else {
       // Iniciar monitoreo primero, luego la grabación
       try {
-        await window.api.startMonitoring();
-        window.api.startCaptureInterval();
+        const monitoringStarted = await window.api.startMonitoring();
         
-        // Solo iniciar grabación si el monitoreo se inició correctamente
-        if ((mediaRecorder as any).startCustomRecording) {
-          (mediaRecorder as any).startCustomRecording();
+        if (monitoringStarted) {
+          window.api.startCaptureInterval();
+          
+          // Solo iniciar grabación si el monitoreo se inició correctamente
+          if ((mediaRecorder as any).startCustomRecording) {
+            (mediaRecorder as any).startCustomRecording();
+          }
+          
+          // IMPORTANTE: Actualizar el estado visual
+          setIsRecording(true);
+          console.log("Monitoreo y grabación iniciados correctamente");
+        } else {
+          console.error("Failed to start monitoring - backend returned false");
+          alert("Error: No se pudo iniciar el monitoreo en el servidor");
         }
-        
-        console.log("Monitoreo y grabación iniciados");
       } catch (err) {
         console.error("Failed to start monitoring:", err);
+        alert("Error: Falló al iniciar el monitoreo");
       }
     }
   };
@@ -551,7 +568,6 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
       }
       
       streamRef.current?.getTracks().forEach((track) => track.stop());
-      window.api.stopProxy();
       
       cameraPermissionStatus?.onchange &&
         (cameraPermissionStatus.onchange = null);
@@ -578,9 +594,9 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
   };
 
   // Handle activity exit
-  const handleExitActivity = async () => {
+  const handleExitActivity = () => {
+    // Llamar directamente a onExit que ahora es simple y rapido
     onExit();
-    window.api.stopProxy();
   };
 
   return (
@@ -630,6 +646,7 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
                         {eventStatus.user?.email || "Loading..."}
                       </span>
                     </div>
+
                   </div>
                 </div>
               </div>

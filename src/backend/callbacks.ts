@@ -7,8 +7,21 @@ let eventKey: string = "";
 let currentProxyPort: number | null = null;
 let isMonitoringActive: boolean = false;
 
+// Variables de control para evitar ejecuciones duplicadas
+let isCleaningUp: boolean = false;
+let isStoppingProxy: boolean = false;
+let isExitingEvent: boolean = false;
+let isUnsettingProxy: boolean = false;
+
 // Función global de cleanup - ejecuta durante el cierre de la app
 export const globalCleanup = async () => {
+  // Evitar ejecuciones duplicadas
+  if (isCleaningUp) {
+    console.log("[CLEANUP] Ya en progreso, evitando duplicación");
+    return;
+  }
+  
+  isCleaningUp = true;
   console.log("[CLEANUP] Iniciando cleanup global");
   try {
     // Detener capturas de pantalla
@@ -21,14 +34,118 @@ export const globalCleanup = async () => {
     }
     
     // Detener proxy
-    if (currentProxyPort) {
+    if (currentProxyPort || connectionManager.isConnected()) {
       console.log("[CLEANUP] Deteniendo proxy");
       await stopProxy();
+    }
+    
+    // CRÍTICO: Desactivar proxy del sistema como medida de seguridad
+    console.log("[CLEANUP] Desactivando proxy del sistema");
+    const success = await disableSystemProxy();
+    if (success) {
+      console.log("[CLEANUP] Proxy del sistema desactivado correctamente");
+    } else {
+      console.warn("[CLEANUP] Falló desactivación del proxy del sistema");
     }
     
     console.log("[CLEANUP] Completado exitosamente");
   } catch (error) {
     console.error("[CLEANUP] Error:", error);
+    // Última oportunidad para limpiar proxy
+    try {
+      console.log("[CLEANUP] Intentando limpieza final del proxy...");
+      await disableSystemProxy();
+    } catch (finalError) {
+      console.error("[CLEANUP] Falló limpieza final:", finalError);
+    }
+  } finally {
+    isCleaningUp = false;
+  }
+};
+
+//*************** SYSTEM PROXY FUNCTIONS ***************
+export const disableSystemProxy = async (): Promise<boolean> => {
+  console.log('🛠️ Desactivando proxy del sistema...');
+  
+  try {
+    const { execFileSync } = require('child_process');
+    
+    if (process.platform === 'win32') {
+      // Windows: Desactivar proxy usando registro de Windows (metodo mas confiable)
+      let success = false;
+      
+      try {
+        // Metodo principal: Registro de Windows
+        const registryCommand = '$regKey = "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings"; ' +
+          'Set-ItemProperty -Path $regKey -Name ProxyEnable -Value 0; ' +
+          'Remove-ItemProperty -Path $regKey -Name ProxyServer -ErrorAction SilentlyContinue; ' +
+          'Write-Host "Proxy desactivado via registro"';
+        
+        execFileSync('powershell.exe', [
+          '-NoProfile',
+          '-ExecutionPolicy', 'Bypass',
+          '-Command', registryCommand
+        ], { windowsHide: true, timeout: 3000 });
+        
+        success = true;
+        console.log('✅ Proxy desactivado via registro de Windows');
+      } catch (regError) {
+        console.warn(`⚠️ Error en registro: ${regError instanceof Error ? regError.message : regError}`);
+      }
+      
+      try {
+        // Método alternativo: netsh winhttp (no crítico si falla)
+        execFileSync('netsh', ['winhttp', 'reset', 'proxy'], { 
+          windowsHide: true, 
+          timeout: 2000 
+        });
+        console.log('✅ WinHTTP proxy reset exitoso');
+      } catch (netshError) {
+        console.warn(`⚠️ WinHTTP reset fallo (no critico): ${netshError instanceof Error ? netshError.message : netshError}`);
+      }
+      
+      try {
+        // Cerrar procesos de navegador para aplicar cambios
+        execFileSync('taskkill', ['/f', '/im', 'iexplore.exe'], { 
+          windowsHide: true, 
+          timeout: 1000 
+        });
+      } catch (killError) {
+        // No critico si no hay procesos para cerrar
+      }
+      
+      if (success) {
+        console.log('✅ Proxy del sistema desactivado en Windows');
+        return true;
+      } else {
+        console.warn('⚠️ No se pudo desactivar completamente el proxy');
+        return false;
+      }
+      
+    } else if (process.platform === 'darwin') {
+      // macOS: Desactivar proxy usando networksetup
+      const interfaces = ['Wi-Fi', 'Ethernet', 'Thunderbolt Ethernet'];
+      
+      for (const iface of interfaces) {
+        try {
+          execFileSync('networksetup', ['-setautoproxystate', iface, 'off'], { timeout: 3000 });
+          execFileSync('networksetup', ['-setproxybypassdomains', iface, ''], { timeout: 3000 });
+        } catch (ifaceError) {
+          // No es crítico si falla para una interfaz específica
+        }
+      }
+      
+      console.log('✅ Proxy del sistema desactivado en macOS');
+      return true;
+      
+    } else {
+      console.log('ℹ️ Desactivacion de proxy no implementada para Linux');
+      return true;
+    }
+    
+  } catch (error) {
+    console.error('❌ Error desactivando proxy del sistema:', error);
+    return false;
   }
 };
 
@@ -37,8 +154,8 @@ export const startProxy = async () => {
   try {
     if (!eventKey) throw new Error("No event key");
 
-    const assignedPort = await connectionManager.connect(eventKey);
-    currentProxyPort = assignedPort;
+    const localPort = await connectionManager.connect(eventKey);
+    currentProxyPort = localPort; // Always 8888
 
     return true;
   } catch (error) {
@@ -48,10 +165,45 @@ export const startProxy = async () => {
 };
 
 export const stopProxy = async () => {
-  await connectionManager.disconnect();
-  currentProxyPort = null;
-  const proxySetup = await isProxySetup();
-  console.log(`Proxy setup status after stopping: ${proxySetup}`);
+  // Evitar ejecuciones duplicadas con timeout de seguridad
+  if (isStoppingProxy) {
+    console.log('🛑 Detencion de proxy ya en progreso, evitando duplicacion');
+    return;
+  }
+  
+  isStoppingProxy = true;
+  
+  // Timeout de seguridad para liberar el lock en caso de error
+  const safetyTimeout = setTimeout(() => {
+    console.warn('⚠️ Timeout de seguridad: liberando lock de stopProxy');
+    isStoppingProxy = false;
+  }, 10000); // 10 segundos
+  
+  try {
+    console.log('🛑 Deteniendo proxy...');
+    
+    // 1. Desconectar connection manager (ya incluye disableSystemProxy)
+    await connectionManager.disconnect();
+    
+    // 2. Limpiar estado local
+    currentProxyPort = null;
+    
+    console.log('✅ Proxy limpiado exitosamente');
+    
+  } catch (error) {
+    console.error('❌ Error deteniendo proxy:', error);
+    
+    // Intentar limpieza de emergencia
+    try {
+      console.log('🚨 Limpieza de emergencia del proxy...');
+      await disableSystemProxy();
+    } catch (emergencyError) {
+      console.error('💥 Fallo limpieza de emergencia:', emergencyError);
+    }
+  } finally {
+    clearTimeout(safetyTimeout);
+    isStoppingProxy = false;
+  }
 };
 
 export const startMonitoring = async () => {
@@ -97,9 +249,10 @@ export const stopMonitoring = async () => {
 };
 
 export const isProxySetup = async (): Promise<boolean> => {
-  if (!currentProxyPort) return false;
+  // En modo HTTP-only, verificar puerto fijo 8888 del LocalProxyServer
+  const localProxyPort = 8888;
 
-  const scripts = PROXY_SCRIPTS(currentProxyPort);
+  const scripts = PROXY_SCRIPTS(localProxyPort, 'localhost');
 
   return new Promise((resolve) => {
     execFile(
@@ -175,7 +328,60 @@ export const joinEvent = async (_eventKey: string) => {
 };
 
 export const exitEvent = async () => {
-  app.quit();
+  // Evitar ejecuciones duplicadas
+  if (isExitingEvent) {
+    console.log('🔄 Salida de evento ya en progreso, evitando duplicacion');
+    return;
+  }
+  
+  isExitingEvent = true;
+  
+  try {
+    console.log('🔄 Saliendo del evento...');
+    
+    // 1. Detener monitoreo si está activo
+    if (isMonitoringActive) {
+      console.log('🛑 Deteniendo monitoreo antes de salir...');
+      await stopMonitoring();
+    }
+    
+    // 2. Detener y desconectar proxy completamente
+    if (currentProxyPort || connectionManager.isConnected()) {
+      console.log('🔌 Desconectando proxy antes de salir...');
+      await stopProxy();
+    }
+    
+    // 3. CRÍTICO: Limpiar configuración del sistema como medida de seguridad
+    console.log('🧹 Limpiando configuración de proxy del sistema...');
+    const success = await disableSystemProxy();
+    if (success) {
+      console.log('✅ Configuracion de proxy limpiada correctamente');
+    } else {
+      console.warn('⚠️ Fallo la limpieza del proxy del sistema');
+    }
+    
+    // 4. Limpiar variables globales
+    eventKey = "";
+    currentProxyPort = null;
+    isMonitoringActive = false;
+    
+    console.log('✅ Evento cerrado correctamente');
+    
+  } catch (error) {
+    console.error('❌ Error cerrando evento:', error);
+    
+    // Aunque haya error, intentar limpiar proxy como último recurso
+    try {
+      console.log('🚨 Intentando limpieza de emergencia del proxy...');
+      await disableSystemProxy();
+    } catch (emergencyError) {
+      console.error('💥 Fallo limpieza de emergencia:', emergencyError);
+    }
+  } finally {
+    isExitingEvent = false;
+    // Siempre salir de la aplicacion
+    app.quit();
+  }
 };
 
 //*************** WINDOW CONTROL FUNCTIONS ***************
@@ -345,3 +551,58 @@ export const uploadMedia = async (data: ArrayBuffer) => {
     throw error; // Re-lanzar para que el caller lo maneje
   }
 };
+
+//*************** SIMPLE PROXY FUNCTIONS ***************
+export const unsetProxySettings = async (): Promise<boolean> => {
+  // Evitar ejecuciones duplicadas/múltiples
+  if (isUnsettingProxy) {
+    console.log('🔄 Desactivacion de proxy ya en progreso, evitando duplicacion');
+    return false;
+  }
+  
+  isUnsettingProxy = true;
+  console.log('🔄 Desactivando configuracion de proxy usando script UNSET...');
+  
+  try {
+    // 1. Detener solo el LocalProxyServer con timeout agresivo
+    if (connectionManager && connectionManager.isConnected()) {
+      console.log('🛑 Deteniendo LocalProxyServer...');
+      try {
+        await Promise.race([
+          connectionManager.stopLocalServer(),
+          new Promise(resolve => setTimeout(resolve, 1000)) // Solo esperar 1 segundo
+        ]);
+      } catch (error) {
+        console.warn('⚠️ Error o timeout deteniendo servidor, continuando...');
+      }
+    }
+    
+    // 2. Desactivar configuración del proxy en Windows
+    if (process.platform === 'win32') {
+      const scripts = PROXY_SCRIPTS(8888, 'localhost'); // Los parámetros no importan para UNSET
+      const { execFileSync } = require('child_process');
+      
+      execFileSync('powershell.exe', [
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-Command', scripts.UNSET_PROXY_SETTINGS
+      ], { windowsHide: true, timeout: 3000 });
+      
+      console.log('✅ Proxy desactivado correctamente usando UNSET_PROXY_SETTINGS');
+    } else {
+      console.log('ℹ️ UNSET_PROXY_SETTINGS solo implementado para Windows');
+    }
+    
+    // 3. Limpiar estado local
+    currentProxyPort = null;
+    
+    return true;
+  } catch (error) {
+    console.error('❌ Error ejecutando UNSET_PROXY_SETTINGS:', error);
+    return false;
+  } finally {
+    isUnsettingProxy = false;
+  }
+};
+
+

@@ -5,9 +5,29 @@ import MediaCapture from "./components/MediaCapture";
 
 const App = () => {
   const [eventKey, setEventKey] = useState("");
+  const [isExiting, setIsExiting] = useState(false);
 
-  const handleExit = () => {
+  const handleExit = async () => {
+    // Evitar múltiples ejecuciones
+    if (isExiting) {
+      console.log('🔄 Ya saliendo, evitando duplicacion...');
+      return;
+    }
+    
+    setIsExiting(true);
+    
+    // Limpiar proxy de forma simple y directa
+    try {
+      console.log('🔄 Usuario presiono regresar, desactivando proxy...');
+      await window.api.unsetProxySettings();
+      console.log('✅ Proxy desactivado correctamente');
+    } catch (error) {
+      console.error('❌ Error desactivando proxy:', error);
+    }
+    
+    // Volver al formulario principal
     setEventKey("");
+    setIsExiting(false);
   };
 
   return (
