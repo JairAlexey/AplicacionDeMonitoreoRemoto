@@ -28,9 +28,7 @@ class ConnectionManager extends EventEmitter {
         const error = await response.json().catch(() => ({ error: 'Error desconocido' }));
         throw new Error(`Autenticación fallida: ${error.error || response.statusText}`);
       }
-      
-      const data = await response.json();
-      
+            
       console.log(`✅ Autenticado correctamente - usando puerto fijo 8888`);
       
       // Iniciar proxy local
@@ -46,39 +44,45 @@ class ConnectionManager extends EventEmitter {
 
   private async _setupLocalProxy(apiBaseUrl: string): Promise<number> {
     try {
+      // Si ya existe una instancia activa y corriendo, solo devolver el puerto
+      if (this.localProxy && this.localProxy.isActive()) {
+        console.log('ℹ️ Proxy local ya está activo, reutilizando instancia.');
+        return this.localProxy.getPort();
+      }
+
       // Configurar LocalProxyServer (puerto fijo 8888)
       const proxyConfig = {
         eventKey: this.eventKey,
         remoteHost: process.env["PROXY_HOST"] || "127.0.0.1",
         apiBaseUrl: apiBaseUrl
       };
-      
+
       this.localProxy = new LocalProxyServer(proxyConfig);
-      
+
       // Configurar event listeners
       this.localProxy.on('started', (port) => {
         console.log(`🚀 Proxy local iniciado en puerto ${port}`);
         this.emit('proxyStarted', port);
       });
-      
+
       this.localProxy.on('error', (error) => {
         console.error('❌ Error en proxy local:', error);
         this.emit('error', error);
       });
-      
+
       this.localProxy.on('stopped', () => {
         console.log('🛑 Proxy local detenido');
         this.emit('proxyStopped');
       });
-      
+
       // Iniciar el servidor proxy local
       const localPort = await this.localProxy.start();
-      
+
       // Configurar el sistema para usar proxy local (localhost:8888)
       this._configureSystemProxy(localPort);
-      
+
       return localPort;
-      
+
     } catch (error) {
       console.error('❌ Error configurando proxy local:', error);
       throw error;
