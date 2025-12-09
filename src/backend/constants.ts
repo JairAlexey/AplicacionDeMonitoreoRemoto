@@ -46,7 +46,7 @@ export const API_ENDPOINTS = {
     PROXY_DISCONNECT: '/proxy/disconnect-http/',
   },
   PRODUCTION: {
-    BASE_URL: process.env['SIX_API_BASE_URL'] || 'https://api.evaltech.com',
+    BASE_URL: process.env['SIX_API_BASE_URL'] || 'http://localhost:8000',
     PROXY_AUTH: '/proxy/auth-http/',
     PROXY_VALIDATE: '/proxy/validate/',
     PROXY_DISCONNECT: '/proxy/disconnect-http/',
@@ -55,7 +55,6 @@ export const API_ENDPOINTS = {
 
 // Función helper para obtener configuración de API
 export const getApiConfig = () => {
-  const isDevelopment = process.env['NODE_ENV'] === 'development' || 
-                        !process.env['SIX_API_BASE_URL'];
+  const isDevelopment = process.env['NODE_ENV'] === 'development';
   return isDevelopment ? API_ENDPOINTS.DEVELOPMENT : API_ENDPOINTS.PRODUCTION;
 };

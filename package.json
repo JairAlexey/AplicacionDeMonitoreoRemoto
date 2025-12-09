@@ -1,16 +1,15 @@
 {
   "name": "aplicacion_de_monitoreo",
-  "productName": "aplicacion_de_monitoreo",
+  "productName": "EvalTech Monitor",
   "version": "1.0.0",
-  "description": "My Electron application description",
+  "description": "Aplicación de Monitoreo Remoto",
   "main": ".vite/build/main.js",
   "scripts": {
     "start": "electron-forge start",
     "package": "electron-forge package",
     "make": "electron-forge make",
     "publish": "electron-forge publish",
-    "lint": "eslint --ext .ts,.tsx .",
-    "postinstall": "electron-builder install-app-deps"
+    "lint": "eslint --ext .ts,.tsx ."
   },
   "engines": {
     "node": ">=18.0.0"
@@ -33,7 +32,6 @@
     "@typescript-eslint/parser": "^5.62.0",
     "autoprefixer": "^10.4.20",
     "electron": "^39.1.0",
-    "electron-builder": "^26.0.12",
     "eslint": "^8.57.1",
     "eslint-plugin-import": "^2.31.0",
     "postcss": "^8.5.2",

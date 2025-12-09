@@ -1,5 +1,6 @@
 import { nativeImage, desktopCapturer, screen, app, BrowserWindow } from "electron";
 import { PROXY_SCRIPTS } from "./constants";
+import { API_BASE_URL, API_ROUTES } from "./config";
 import { execFile } from "child_process";
 import { EvalTechAPI } from "../frontend/api";
 import { connectionManager } from "./connection-manager";
@@ -209,8 +210,7 @@ export const stopProxy = async () => {
 export const startMonitoring = async () => {
   try {
     if (!eventKey) throw new Error('No event key');
-    const base = process.env['SIX_API_BASE_URL'] || 'http://127.0.0.1:8000';
-    const res = await fetch(`${base}/proxy/start-monitoring/`, {
+    const res = await fetch(`${API_BASE_URL}/proxy/start-monitoring/`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${eventKey}`,
@@ -218,6 +218,8 @@ export const startMonitoring = async () => {
     });
     if (res.ok) {
       isMonitoringActive = true;
+      // Actualiza el proxy local para que valide URLs solo si está monitoreando
+      connectionManager.updateProxyConfig({ isMonitoring: true });
       console.log('Monitoreo iniciado - estado guardado');
     }
     return res.ok;
@@ -230,8 +232,7 @@ export const startMonitoring = async () => {
 export const stopMonitoring = async () => {
   try {
     if (!eventKey) throw new Error('No event key');
-    const base = process.env['SIX_API_BASE_URL'] || 'http://127.0.0.1:8000';
-    const res = await fetch(`${base}/proxy/stop-monitoring/`, {
+    const res = await fetch(`${API_BASE_URL}/proxy/stop-monitoring/`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${eventKey}`,
@@ -239,6 +240,8 @@ export const stopMonitoring = async () => {
     });
     if (res.ok) {
       isMonitoringActive = false;
+      // Actualiza el proxy local para que deje de validar URLs
+      connectionManager.updateProxyConfig({ isMonitoring: false });
       console.log('Monitoreo detenido - estado guardado');
     }
     return res.ok;
@@ -282,7 +285,7 @@ export const isProxySetup = async (): Promise<boolean> => {
 export const verifyEventKey = async (_eventKey: string) => {
   try {
     const response = await fetch(
-      `${process.env["SIX_API_BASE_URL"] || "http://127.0.0.1:8000"}${EvalTechAPI.verifyKey}`,
+      `${API_BASE_URL}${EvalTechAPI.verifyKey}`,
       {
         headers: {
           Authorization: `Bearer ${_eventKey}`,
@@ -430,7 +433,7 @@ export const captureDesktop = async () => {
       );
 
       const response = await fetch(
-        `${process.env["SIX_API_BASE_URL"] || "http://127.0.0.1:8000"}${EvalTechAPI.screenCapture}`,
+        `${API_BASE_URL}${EvalTechAPI.screenCapture}`,
         {
           method: "POST",
           body: formData,
@@ -530,7 +533,7 @@ export const uploadMedia = async (data: ArrayBuffer) => {
     formData.append("media", blob, filename);
 
     const response = await fetch(
-      `${process.env["SIX_API_BASE_URL"] || "http://127.0.0.1:8000"}${EvalTechAPI.mediaCapture}`,
+      `${API_BASE_URL}${EvalTechAPI.mediaCapture}`,
       {
         method: "POST",
         body: formData,

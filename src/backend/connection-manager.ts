@@ -1,5 +1,6 @@
 import { EventEmitter } from "events";
 import { PROXY_SCRIPTS } from "./constants";
+import { API_BASE_URL } from "./config";
 import { execFileSync } from "child_process";
 import { LocalProxyServer } from "./local-proxy-server";
 
@@ -13,10 +14,8 @@ class ConnectionManager extends EventEmitter {
     
     try {
       // Autenticación HTTP en lugar de socket gateway
-      const apiBaseUrl = process.env["SIX_API_BASE_URL"] || "http://127.0.0.1:8000";
-      
       console.log("🔐 Autenticando con servidor via HTTP...");
-      const response = await fetch(`${apiBaseUrl}/proxy/auth-http/`, {
+      const response = await fetch(`${API_BASE_URL}/proxy/auth-http/`, {
         method: "POST",
         headers: {
           "Authorization": `Bearer ${eventKey}`,
@@ -32,7 +31,7 @@ class ConnectionManager extends EventEmitter {
       console.log(`✅ Autenticado correctamente - usando puerto fijo 8888`);
       
       // Iniciar proxy local
-      const localPort = await this._setupLocalProxy(apiBaseUrl);
+      const localPort = await this._setupLocalProxy(API_BASE_URL);
       
       return localPort;
       
@@ -51,10 +50,13 @@ class ConnectionManager extends EventEmitter {
       }
 
       // Configurar LocalProxyServer (puerto fijo 8888)
+      // Obtener el estado de monitoreo desde el entorno global (puedes ajustar según tu lógica)
+      const isMonitoring = (global as any).isMonitoringActive || false;
       const proxyConfig = {
         eventKey: this.eventKey,
         remoteHost: process.env["PROXY_HOST"] || "127.0.0.1",
-        apiBaseUrl: apiBaseUrl
+        apiBaseUrl: apiBaseUrl,
+        isMonitoring: isMonitoring
       };
 
       this.localProxy = new LocalProxyServer(proxyConfig);
@@ -140,9 +142,7 @@ class ConnectionManager extends EventEmitter {
       // Notificar al servidor via HTTP
       if (this.eventKey) {
         try {
-          const apiBaseUrl = process.env["SIX_API_BASE_URL"] || "http://127.0.0.1:8000";
-          
-          await fetch(`${apiBaseUrl}/proxy/disconnect-http/`, {
+          await fetch(`${API_BASE_URL}/proxy/disconnect-http/`, {
             method: "POST",
             headers: {
               "Authorization": `Bearer ${this.eventKey}`,

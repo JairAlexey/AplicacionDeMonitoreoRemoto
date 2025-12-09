@@ -16,6 +16,7 @@ const registry = {
   uploadMedia: true,
   verifyEventKey: true,
   minimizeWindow: true,
+  appReady: true,
 };
 
 const handlersMappedToIpcRenderer = Object.entries(registry)

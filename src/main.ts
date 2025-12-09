@@ -8,8 +8,15 @@ import {
 import path from "node:path";
 import { callbacks, globalCleanup } from "./backend";
 import { config } from "dotenv";
+// Deshabilitar completamente el splash screen de Squirrel
+import squirrelStartup from "electron-squirrel-startup";
 
 config();
+
+// Si Squirrel está manejando eventos de instalación, salir inmediatamente
+if (squirrelStartup) {
+  app.quit();
+}
 
 const createWindow = () => {
   const { screen } = require("electron");
@@ -30,11 +37,15 @@ const createWindow = () => {
     alwaysOnTop: false, // Ya no forzamos que esté siempre encima
     x: width - winWidth - margin,
     y: height - winHeight - margin,
+    icon: path.join(__dirname, "../renderer/main_window/assets/images/logo.ico"),
+    backgroundColor: '#ffffff',
+    show: false, // No mostrar hasta que esté cargado
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       nodeIntegration: false,
       contextIsolation: true,
       webSecurity: false,
+      backgroundThrottling: false, // Evita ralentización
     },
   });
 
@@ -46,6 +57,17 @@ const createWindow = () => {
       path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`),
     );
   }
+  
+  // Mostrar ventana solo cuando React notifique que está listo
+  ipcMain.handle('appReady', () => {
+    if (!mainWindow.isDestroyed()) {
+      // Pequeño delay para asegurar que el render está completo
+      setTimeout(() => {
+        mainWindow.show();
+        mainWindow.focus();
+      }, 100);
+    }
+  });
   
   // Quitar la barra de menú
   mainWindow.setMenuBarVisibility(false);

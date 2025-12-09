@@ -1,3 +1,4 @@
+
 import React, { useEffect, useRef, useState } from "react";
 import {
   FaCheckCircle,
@@ -34,6 +35,13 @@ type EventStatus = {
   
 };
 
+// Utilidad para formatear segundos a mm:ss
+function formatSecondsToMMSS(totalSeconds: number): string {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+}
+
 const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
   // Refs and state for media capture
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -57,6 +65,100 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
     status: "Loading...",
     user: undefined,
   });
+
+  // Cronómetro: tiempo restante en segundos
+  const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
+  const eventDurationRef = useRef<number | null>(null);
+  const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isMonitoringActiveRef = useRef<boolean>(false);
+
+  // Función para obtener y calcular el tiempo restante desde el backend
+  const fetchAndUpdateRemainingTime = async () => {
+    try {
+      const verification = await window.api.verifyEventKey(eventKey);
+      if (verification && verification.event && verification.participant) {
+        const durationMinutes = verification.event.duration || 0;
+        eventDurationRef.current = durationMinutes * 60; // Guardar duración total en segundos
+        
+        // monitoring_total_duration viene del backend (solo se actualiza cuando se detiene monitoreo)
+        const monitoringTotalSeconds = verification.participant.monitoring_total_duration || 0;
+        const totalSeconds = Math.max(eventDurationRef.current - monitoringTotalSeconds, 0);
+        setRemainingSeconds(totalSeconds);
+      }
+    } catch (err) {
+      // Si falla, no actualiza el cronómetro
+    }
+  };
+
+  // Función para iniciar el contador local (se decrementa cada segundo)
+  const startLocalTimer = () => {
+    // Limpiar cualquier intervalo previo
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+    }
+
+    isMonitoringActiveRef.current = true;
+
+    // Decrementar cada segundo mientras está en monitoreo
+    timerIntervalRef.current = setInterval(() => {
+      setRemainingSeconds(prev => {
+        if (prev === null || prev <= 0) {
+          return prev;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  };
+
+  // Función para detener el contador local y sincronizar con backend
+  const stopLocalTimer = async () => {
+    isMonitoringActiveRef.current = false;
+    
+    // Detener el intervalo
+    if (timerIntervalRef.current) {
+      clearInterval(timerIntervalRef.current);
+      timerIntervalRef.current = null;
+    }
+
+    // Esperar un momento para que el backend procese el stop_monitoring
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    // Sincronizar con el backend para obtener el valor real actualizado
+    await fetchAndUpdateRemainingTime();
+  };
+
+  // Efecto para inicializar el cronómetro (solo una vez al cargar)
+  useEffect(() => {
+    fetchAndUpdateRemainingTime();
+    
+    // Limpiar intervalo al desmontar
+    return () => {
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+      }
+    };
+  }, [eventKey]);
+
+  // Renderizar el cronómetro compacto (para al lado del botón)
+  const renderCompactTimer = () => {
+    if (remainingSeconds === null) return null;
+    return (
+      <div className="rounded-full border border-gray-600 bg-white px-2 py-1 text-xs font-mono text-gray-800">
+        {formatSecondsToMMSS(remainingSeconds)}
+      </div>
+    );
+  };
+
+  // Renderizar el cronómetro en el modal
+  const renderTimerInModal = () => {
+    if (remainingSeconds === null) return null;
+    return (
+      <div className="flex items-center">
+        <span className="mr-2 w-20">Tiempo restante:</span>
+        <span className="text-gray-400 font-mono">{formatSecondsToMMSS(remainingSeconds)}</span>
+      </div>
+    );
+  };
 
 
 
@@ -264,6 +366,9 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
       } catch (err) {
         console.error("Failed to stop monitoring:", err);
       }
+
+      // DESPUÉS de que el backend actualizó, sincronizar el timer
+      await stopLocalTimer();
     } catch (err) {
       console.error('Error stopping capture:', err);
     }
@@ -286,6 +391,9 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
         
         if (monitoringStarted) {
           window.api.startCaptureInterval();
+          
+          // Iniciar el contador local del timer
+          startLocalTimer();
           
           // Solo iniciar grabación si el monitoreo se inició correctamente
           if ((mediaRecorder as any).startCustomRecording) {
@@ -646,7 +754,7 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
                         {eventStatus.user?.email || "Loading..."}
                       </span>
                     </div>
-
+                    {renderTimerInModal()}
                   </div>
                 </div>
               </div>
@@ -665,14 +773,15 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
               </div>
             </div>
 
-            {/* Top-left info button */}
-            <div className="absolute top-2 left-2 z-10">
+            {/* Top-left info button and timer */}
+            <div className="absolute top-2 left-2 z-10 flex items-center gap-2">
               <button
                 onClick={() => setShowEventDetails(!showEventDetails)}
                 className="rounded-full border border-gray-600 bg-gray-800/80 p-1.5 text-white backdrop-blur-sm transition-all hover:bg-gray-700/90 hover:scale-110"
               >
                 <FaInfoCircle size={12} />
               </button>
+              {renderCompactTimer()}
             </div>
 
             {/* Top-right reload button */}

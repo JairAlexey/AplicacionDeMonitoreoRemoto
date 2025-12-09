@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import "./index.css";
 import JoinEventForm from "./components/JoinEventForm";
 import MediaCapture from "./components/MediaCapture";
@@ -6,6 +6,11 @@ import MediaCapture from "./components/MediaCapture";
 const App = () => {
   const [eventKey, setEventKey] = useState("");
   const [isExiting, setIsExiting] = useState(false);
+
+  // Notificar a Electron que React está listo
+  useEffect(() => {
+    window.api.appReady();
+  }, []);
 
   const handleExit = async () => {
     // Evitar múltiples ejecuciones

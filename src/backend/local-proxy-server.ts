@@ -8,6 +8,7 @@ interface ProxyConfig {
   remoteHost: string;
   remotePort?: number;
   apiBaseUrl: string;
+  isMonitoring?: boolean;
 }
  
 export class LocalProxyServer extends EventEmitter {
@@ -125,9 +126,14 @@ export class LocalProxyServer extends EventEmitter {
     targetUrl: string,
     headers: http.IncomingHttpHeaders
   ): Promise<{ blocked: boolean; reason?: string }> {
+    // Solo validar si isMonitoring es true
+    if (!this.config.isMonitoring) {
+      // Si no está monitoreando, permite la URL sin consultar al backend
+      return { blocked: false };
+    }
     try {
       const validationUrl = `${this.config.apiBaseUrl}/proxy/validate/`;
- 
+
       const response = await fetch(validationUrl, {
         method: 'POST',
         headers: {
@@ -141,19 +147,19 @@ export class LocalProxyServer extends EventEmitter {
           timestamp: new Date().toISOString()
         })
       });
- 
+
       if (!response.ok) {
         console.error(`Error validando URL: ${response.status} ${response.statusText}`);
         // En caso de error, bloquear por seguridad
         return { blocked: true, reason: 'Error de validación' };
       }
- 
+
       const result = await response.json();
       return {
         blocked: result.blocked || false,
         reason: result.reason || 'Sitio no permitido'
       };
- 
+
     } catch (error) {
       console.error('Error conectando con servidor:', error);
       // En caso de error de conexión, bloquear por seguridad
