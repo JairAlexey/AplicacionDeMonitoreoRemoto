@@ -506,13 +506,22 @@ export const captureDesktop = async () => {
       },
     });
 
-    sources.forEach(async (source) => {
+    // Usar Promise.all para esperar a que todas las capturas se envíen
+    await Promise.all(sources.map(async (source, index) => {
       if (!source) {
         console.error("No screen found.");
         return;
       }
       const screenSource = source;
-      console.log(`Capturing screen: ${screenSource.name}`);
+      
+      // Renombrar monitores para que sean más amigables (Screen 1, Screen 2, etc.)
+      // Si el nombre original es "Entire Screen" o similar, usar el índice
+      let friendlyName = screenSource.name;
+      if (friendlyName.toLowerCase().includes("screen") || friendlyName.toLowerCase().includes("pantalla") || friendlyName.toLowerCase().includes("display")) {
+         friendlyName = `Screen ${index + 1}`;
+      }
+      
+      console.log(`Capturing screen: ${friendlyName} (Original: ${screenSource.name})`);
 
       const image = nativeImage.createFromDataURL(
         screenSource.thumbnail.toDataURL(),
@@ -528,6 +537,7 @@ export const captureDesktop = async () => {
         new Blob([uint8Array], { type: "image/png" }),
         "screenshot.png",
       );
+      formData.append("monitor_name", friendlyName);
 
       const response = await fetch(
         `${API_BASE_URL}${EvalTechAPI.screenCapture}`,
@@ -544,8 +554,8 @@ export const captureDesktop = async () => {
         throw new Error(`API error: ${response.statusText}`);
       }
 
-      console.log("Screenshot sent successfully.");
-    });
+      console.log(`Screenshot sent successfully for ${friendlyName}.`);
+    }));
   } catch (error) {
     console.error(`Error capturing screen: ${error}`);
   }

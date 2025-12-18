@@ -109,8 +109,21 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
     // Decrementar cada segundo mientras está en monitoreo
     timerIntervalRef.current = setInterval(() => {
       setRemainingSeconds(prev => {
-        if (prev === null || prev <= 0) {
-          return prev;
+        if (prev === null) return null;
+        
+        // Si llega a 0, detener todo automáticamente
+        if (prev <= 1) {
+          // Usar setTimeout para evitar conflictos de estado dentro del render
+          setTimeout(() => {
+            // Usar la referencia para evitar problemas de clausura (stale closure)
+            if (isMonitoringActiveRef.current) {
+              console.log("⏳ Tiempo agotado - Deteniendo monitoreo automáticamente");
+              stopRecording();
+              setToastMessage("⏳ Tiempo del evento finalizado");
+              setShowToast(true);
+            }
+          }, 0);
+          return 0;
         }
         return prev - 1;
       });
@@ -456,7 +469,8 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
 
   // Función compartida para detener el monitoreo (usada tanto manualmente como automáticamente)
   const stopRecording = async () => {
-    if (!mediaRecorder || !isRecording) {
+    // Verificar tanto el estado como la referencia para evitar problemas de clausura
+    if (!mediaRecorder || (!isRecording && !isMonitoringActiveRef.current)) {
       return;
     }
 
@@ -464,29 +478,9 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
       // Stop creating new logs locally
       window.api.stopCaptureInterval();
 
-      // Si tiene la función personalizada de cleanup, usarla
+      // Usar la función personalizada de cleanup
       if ((mediaRecorder as any).stopAndUpload) {
         await (mediaRecorder as any).stopAndUpload();
-      } else {
-        // Fallback al comportamiento original
-        await new Promise<void>((resolve) => {
-          const originalOnStop = mediaRecorder.onstop;
-          mediaRecorder.onstop = async (e: any) => {
-            try {
-              if (originalOnStop) await (originalOnStop as any)(e);
-            } catch (err) {
-              console.error('Error in original onstop:', err);
-            } finally {
-              resolve();
-            }
-          };
-          
-          if (mediaRecorder.state !== 'inactive') {
-            mediaRecorder.stop();
-          } else {
-            resolve();
-          }
-        });
       }
 
       // Ahora que el upload terminó, avisar al backend para finalizar sesión
@@ -801,17 +795,6 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
 
     // Agregar listener de cambios en dispositivos
     navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
-
-    // Listener para el cierre de la aplicación - NO HACE NADA
-    // El cleanup se maneja en el main process
-    const handleAppClosing = () => {
-      console.log("[RENDERER] App closing signal recibido");
-      // El main process ya se encarga de todo el cleanup
-    };
-
-    if (window.api.onAppClosing) {
-      window.api.onAppClosing(handleAppClosing);
-    }
 
     checkMediaAccess();
     setupPermissions();
