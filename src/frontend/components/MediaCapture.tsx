@@ -13,6 +13,7 @@ import {
   FaSyncAlt,
 } from "react-icons/fa";
 import CustomTitleBar from "./ui/CustomTitleBar";
+import Toast from "./ui/ToastNotification";
 import guiaRostro from '../assets/images/guia.png';
 
 type JoinEventFormProps = {
@@ -58,6 +59,11 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
   const [hasMicrophoneAccess, setHasMicrophoneAccess] = useState(false);
   const [hasScreenAccess, setHasScreenAccess] = useState(false);
   const [displayCount, setDisplayCount] = useState(0);
+  const [isProxyValid, setIsProxyValid] = useState(true);
+
+  // Toast notifications
+  const [showToast, setShowToast] = useState(false);
+  const [toastMessage, setToastMessage] = useState("");
 
   // Event state
   const [eventStatus, setEventStatus] = useState<EventStatus>({
@@ -71,6 +77,7 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
   const eventDurationRef = useRef<number | null>(null);
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isMonitoringActiveRef = useRef<boolean>(false);
+  const proxyCheckIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   // Función para obtener y calcular el tiempo restante desde el backend
   const fetchAndUpdateRemainingTime = async () => {
@@ -174,6 +181,7 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
           await window.api.startProxy();
           const isProxyConnected = await window.api.isProxySetup();
 
+          setIsProxyValid(isProxyConnected);
           setEventStatus({
             name: verification.event.name || "Unknown Event",
             status: isProxyConnected ? "Tracking" : "No tracking",
@@ -182,20 +190,141 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
               name: verification.participant.name,
             },
           });
-          
-
         }
       } catch (error) {
+        setIsProxyValid(false);
         setEventStatus({
           name: "Unknown Event",
           status: "No tracking",
           user: undefined,
         });
+        return undefined;
+      }
+    };
+
+    // Función para verificar el estado del proxy y bloqueo periódicamente
+    const checkProxyAndBlockStatus = async () => {
+      try {
+        // Verificar estado del proxy
+        const isProxyConnected = await window.api.isProxySetup();
+        
+        // Verificar estado de bloqueo del participante
+        let isBlocked = false;
+        try {
+          const verification = await window.api.verifyEventKey(eventKey);
+          // Si la verificación falla o no está permitida, el participante está bloqueado
+          if (!verification || !verification.isValid) {
+            isBlocked = true;
+          }
+        } catch (error) {
+          // Si hay error en la verificación, asumir bloqueado
+          console.error('Error verificando estado de bloqueo:', error);
+          isBlocked = true;
+        }
+        
+        // Si el participante fue bloqueado
+        if (isBlocked && isProxyValid) {
+          console.warn('⚠️ Participante bloqueado por el administrador');
+          
+          // Detener monitoreo si está activo
+          if (isRecording) {
+            await stopRecording();
+          }
+          
+          // Actualizar estados
+          setIsProxyValid(false);
+          setIsRecording(false);
+          setEventStatus(prev => ({
+            ...prev,
+            status: "No tracking"
+          }));
+          
+          // Mostrar notificación
+          setToastMessage("🔒 Acceso bloqueado por el administrador");
+          setShowToast(true);
+          
+          return; // No continuar con otras verificaciones
+        }
+        
+        // Verificación normal del proxy (solo si no está bloqueado)
+        if (!isProxyConnected && isProxyValid) {
+          // Proxy se desconectó
+          setIsProxyValid(false);
+          setEventStatus(prev => ({
+            ...prev,
+            status: "No tracking"
+          }));
+          setToastMessage("⚠️ Proxy desactivado");
+          setShowToast(true);
+        } else if (isProxyConnected && !isProxyValid && !isBlocked) {
+          // Proxy se reconectó (y no está bloqueado)
+          setIsProxyValid(true);
+          setEventStatus(prev => ({
+            ...prev,
+            status: "Tracking"
+          }));
+          setToastMessage("✅ Proxy reconectado");
+          setShowToast(true);
+        }
+      } catch (error) {
+        console.error('Error verificando estado:', error);
       }
     };
 
     initializeProxy();
-  }, [eventKey]);
+    
+    // Verificar proxy y bloqueo cada 5 segundos
+    proxyCheckIntervalRef.current = setInterval(checkProxyAndBlockStatus, 5000);
+
+    // IMPORTANTE: Listener para detectar manipulación del proxy
+    const handleProxyTampering = (data: { reason: string; timestamp: string }) => {
+      console.error('🚨 Proxy tampering detected in UI:', data);
+      
+      // Detener grabación inmediatamente
+      if (isRecording) {
+        stopRecording();
+      }
+      
+      // Actualizar estado visual
+      setIsRecording(false);
+      setIsProxyValid(false);
+      
+      // Detener el timer local
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+        timerIntervalRef.current = null;
+      }
+      isMonitoringActiveRef.current = false;
+      
+      // Mostrar toast corto
+      setToastMessage("⚠️ Monitoreo detenido - Proxy modificado");
+      setShowToast(true);
+      
+      // Actualizar estado del evento
+      setEventStatus(prev => ({
+        ...prev,
+        status: "No tracking"
+      }));
+    };
+
+    // Registrar el listener usando la API expuesta
+    if (window.api?.onProxyTampering) {
+      window.api.onProxyTampering(handleProxyTampering);
+    }
+    
+    // Cleanup al desmontar - siempre retornar función de cleanup
+    return () => {
+      if (window.api?.removeProxyTamperingListener) {
+        window.api.removeProxyTamperingListener();
+      }
+      
+      // Limpiar intervalo de verificación del proxy
+      if (proxyCheckIntervalRef.current) {
+        clearInterval(proxyCheckIntervalRef.current);
+        proxyCheckIntervalRef.current = null;
+      }
+    };
+  }, [eventKey, isRecording, isProxyValid]);
 
 
 
@@ -385,8 +514,23 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
     if (isRecording) {
       await stopRecording();
     } else {
+      // Validar permisos y proxy antes de iniciar
+      if (!hasCameraAccess || !hasMicrophoneAccess) {
+        setToastMessage("⚠️ Verifica permisos de cámara y micrófono");
+        setShowToast(true);
+        return;
+      }
+
+      if (!isProxyValid) {
+        setToastMessage("⚠️ Proxy no válido - Reinicia la aplicación");
+        setShowToast(true);
+        return;
+      }
+
       // Iniciar monitoreo primero, luego la grabación
       try {
+        console.log("🔍 Verificando proxy antes de iniciar monitoreo...");
+        
         const monitoringStarted = await window.api.startMonitoring();
         
         if (monitoringStarted) {
@@ -402,14 +546,17 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
           
           // IMPORTANTE: Actualizar el estado visual
           setIsRecording(true);
-          console.log("Monitoreo y grabación iniciados correctamente");
+          console.log("✅ Monitoreo y grabación iniciados correctamente");
         } else {
-          console.error("Failed to start monitoring - backend returned false");
-          alert("Error: No se pudo iniciar el monitoreo en el servidor");
+          console.error("❌ Failed to start monitoring - backend returned false");
+          setIsProxyValid(false);
+          setToastMessage("⚠️ No se puede iniciar - Proxy no válido");
+          setShowToast(true);
         }
       } catch (err) {
-        console.error("Failed to start monitoring:", err);
-        alert("Error: Falló al iniciar el monitoreo");
+        console.error("❌ Failed to start monitoring:", err);
+        setToastMessage("⚠️ Error de conexión con el servidor");
+        setShowToast(true);
       }
     }
   };
@@ -440,6 +587,8 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
         track.onended = async () => {
           console.warn("Video track terminado - cámara desconectada o en uso");
           setHasCameraAccess(false);
+          setToastMessage("⚠️ Cámara desconectada");
+          setShowToast(true);
           // Detener monitoreo si estaba activo
           await stopRecording();
         };
@@ -447,6 +596,8 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
         track.onmute = async () => {
           console.warn("Video track muteado");
           setHasCameraAccess(false);
+          setToastMessage("⚠️ Cámara en uso por otra aplicación");
+          setShowToast(true);
           // Detener monitoreo si estaba activo
           await stopRecording();
         };
@@ -462,6 +613,8 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
         track.onended = async () => {
           console.warn("Audio track terminado - micrófono desconectado o en uso");
           setHasMicrophoneAccess(false);
+          setToastMessage("⚠️ Micrófono desconectado");
+          setShowToast(true);
           // Detener monitoreo si estaba activo
           await stopRecording();
         };
@@ -469,6 +622,8 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
         track.onmute = async () => {
           console.warn("Audio track muteado");
           setHasMicrophoneAccess(false);
+          setToastMessage("⚠️ Micrófono en uso por otra aplicación");
+          setShowToast(true);
           // Detener monitoreo si estaba activo
           await stopRecording();
         };
@@ -840,14 +995,14 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
             <button
               onClick={toggleRecording}
               disabled={
-                // Solo deshabilitar para EMPEZAR si no hay permisos, pero siempre permitir DETENER
-                !isRecording && (!hasCameraAccess || !hasMicrophoneAccess || !hasScreenAccess || eventStatus.status === "No tracking")
+                // Solo deshabilitar para EMPEZAR si no hay permisos o proxy no válido, pero siempre permitir DETENER
+                !isRecording && (!hasCameraAccess || !hasMicrophoneAccess || !hasScreenAccess || !isProxyValid || eventStatus.status === "No tracking")
               }
               className={`w-full rounded-md py-2 px-3 text-sm font-semibold transition-all transform flex items-center justify-center gap-2 shadow-lg ${
                 isRecording
                   ? "bg-red-600 text-white hover:bg-red-700 hover:scale-105"
                   : "bg-blue-600 text-white hover:bg-blue-700 hover:scale-105"
-              } ${(!isRecording && (!hasCameraAccess || !hasMicrophoneAccess || !hasScreenAccess || eventStatus.status === "No tracking")) && "cursor-not-allowed opacity-50 hover:scale-100"}`}
+              } ${(!isRecording && (!hasCameraAccess || !hasMicrophoneAccess || !hasScreenAccess || !isProxyValid || eventStatus.status === "No tracking")) && "cursor-not-allowed opacity-50 hover:scale-100"}`}
             >
               {isRecording ? (
                 <>
@@ -875,6 +1030,15 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
         </div>
         </div>
       </div>
+
+      {/* Toast Notification */}
+      {showToast && (
+        <Toast
+          message={toastMessage}
+          onClose={() => setShowToast(false)}
+          duration={3000}
+        />
+      )}
     </div>
   );
 };

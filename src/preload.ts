@@ -36,12 +36,22 @@ const handlersMappedToIpcRenderer = Object.entries(registry)
     >,
   );
 
-// onAppClosing no es un callback IPC normal, es un listener de eventos
+// Event listeners para eventos del proceso principal
 const onAppClosing = (callback: () => void) => {
   ipcRenderer.on('app-closing', callback);
+};
+
+const onProxyTampering = (callback: (data: any) => void) => {
+  ipcRenderer.on('proxy-tampering', (_event, data) => callback(data));
+};
+
+const removeProxyTamperingListener = () => {
+  ipcRenderer.removeAllListeners('proxy-tampering');
 };
 
 contextBridge.exposeInMainWorld("api", {
   ...handlersMappedToIpcRenderer,
   onAppClosing,
+  onProxyTampering,
+  removeProxyTamperingListener,
 });

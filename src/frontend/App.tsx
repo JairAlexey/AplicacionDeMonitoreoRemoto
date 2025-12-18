@@ -21,13 +21,26 @@ const App = () => {
     
     setIsExiting(true);
     
-    // Limpiar proxy de forma simple y directa
+    // Detener monitoreo y proxy de forma completa
     try {
-      console.log('🔄 Usuario presiono regresar, desactivando proxy...');
+      console.log('🔄 Usuario presiono regresar, limpiando sistema...');
+      
+      // Detener monitoreo si está activo
+      await window.api.stopMonitoring().catch(err => {
+        console.warn('⚠️ Error deteniendo monitoreo:', err);
+      });
+      
+      // Detener proxy (esto también detiene el monitor)
+      await window.api.stopProxy().catch((err: any) => {
+        console.warn('⚠️ Error deteniendo proxy:', err);
+      });
+      
+      // Desactivar proxy del sistema
       await window.api.unsetProxySettings();
-      console.log('✅ Proxy desactivado correctamente');
+      
+      console.log('✅ Sistema limpiado correctamente');
     } catch (error) {
-      console.error('❌ Error desactivando proxy:', error);
+      console.error('❌ Error en limpieza:', error);
     }
     
     // Volver al formulario principal

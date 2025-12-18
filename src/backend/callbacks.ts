@@ -1,6 +1,6 @@
 import { nativeImage, desktopCapturer, screen, app, BrowserWindow } from "electron";
 import { PROXY_SCRIPTS } from "./constants";
-import { API_BASE_URL, API_ROUTES } from "./config";
+import { API_BASE_URL } from "./config";
 import { execFile } from "child_process";
 import { EvalTechAPI } from "../frontend/api";
 import { connectionManager } from "./connection-manager";
@@ -14,11 +14,14 @@ let isStoppingProxy: boolean = false;
 let isExitingEvent: boolean = false;
 let isUnsettingProxy: boolean = false;
 
+// Helper para obtener el estado de monitoreo
+export const getMonitoringStatus = (): boolean => isMonitoringActive;
+
 // Función global de cleanup - ejecuta durante el cierre de la app
 export const globalCleanup = async () => {
   // Evitar ejecuciones duplicadas
   if (isCleaningUp) {
-    console.log("[CLEANUP] Ya en progreso, evitando duplicación");
+    console.log("[CLEANUP] Ya en progreso, evitando duplicacion");
     return;
   }
   
@@ -46,7 +49,7 @@ export const globalCleanup = async () => {
     if (success) {
       console.log("[CLEANUP] Proxy del sistema desactivado correctamente");
     } else {
-      console.warn("[CLEANUP] Falló desactivación del proxy del sistema");
+      console.warn("[CLEANUP] Fallo desactivacion del proxy del sistema");
     }
     
     console.log("[CLEANUP] Completado exitosamente");
@@ -57,7 +60,7 @@ export const globalCleanup = async () => {
       console.log("[CLEANUP] Intentando limpieza final del proxy...");
       await disableSystemProxy();
     } catch (finalError) {
-      console.error("[CLEANUP] Falló limpieza final:", finalError);
+      console.error("[CLEANUP] Fallo limpieza final:", finalError);
     }
   } finally {
     isCleaningUp = false;
@@ -181,7 +184,7 @@ export const stopProxy = async () => {
   }, 10000); // 10 segundos
   
   try {
-    console.log('🛑 Deteniendo proxy...');
+    console.log('Deteniendo proxy...');
     
     // 1. Desconectar connection manager (ya incluye disableSystemProxy)
     await connectionManager.disconnect();
@@ -189,17 +192,17 @@ export const stopProxy = async () => {
     // 2. Limpiar estado local
     currentProxyPort = null;
     
-    console.log('✅ Proxy limpiado exitosamente');
+    console.log('Proxy limpiado exitosamente');
     
   } catch (error) {
-    console.error('❌ Error deteniendo proxy:', error);
+    console.error('Error deteniendo proxy:', error);
     
     // Intentar limpieza de emergencia
     try {
-      console.log('🚨 Limpieza de emergencia del proxy...');
+      console.log('Limpieza de emergencia del proxy...');
       await disableSystemProxy();
     } catch (emergencyError) {
-      console.error('💥 Fallo limpieza de emergencia:', emergencyError);
+      console.error('Fallo limpieza de emergencia:', emergencyError);
     }
   } finally {
     clearTimeout(safetyTimeout);
@@ -210,18 +213,36 @@ export const stopProxy = async () => {
 export const startMonitoring = async () => {
   try {
     if (!eventKey) throw new Error('No event key');
+    
+    // VALIDACIÓN: Verificar que el proxy esté activo y configurado correctamente
+    const proxyActive = await isProxySetup();
+    if (!proxyActive) {
+      console.error('No se puede iniciar monitoreo: Proxy no esta configurado');
+      return false;
+    }
+    
+    // Verificar que el proxy local esté conectado
+    if (!connectionManager.isConnected()) {
+      console.error('No se puede iniciar monitoreo: Proxy local no esta conectado');
+      return false;
+    }
+    
     const res = await fetch(`${API_BASE_URL}/proxy/start-monitoring/`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${eventKey}`,
       },
     });
+    
     if (res.ok) {
       isMonitoringActive = true;
       // Actualiza el proxy local para que valide URLs solo si está monitoreando
       connectionManager.updateProxyConfig({ isMonitoring: true });
       console.log('Monitoreo iniciado - estado guardado');
+    } else {
+      console.error('Error del servidor al iniciar monitoreo');
     }
+    
     return res.ok;
   } catch (error) {
     console.error('startMonitoring error:', error);
@@ -251,6 +272,82 @@ export const stopMonitoring = async () => {
   }
 };
 
+let isHandlingTampering = false;
+
+/**
+ * Maneja la detección de manipulación del proxy
+ * Pausa automáticamente el monitoreo y notifica al servidor
+ * SOLO si el monitoreo está activo
+ */
+export const handleProxyTampering = async (reason: string) => {
+  // console.error('MANIPULACION DEL PROXY DETECTADA:', reason);
+  
+  // ⚠️ IMPORTANTE: Solo actuar si el monitoreo está activo y no se está manejando ya
+  if (!isMonitoringActive || isHandlingTampering) {
+    // console.log('Proxy manipulado pero monitoreo no esta activo o ya se esta manejando - ignorando');
+    return;
+  }
+  
+  isHandlingTampering = true;
+  
+  try {
+    console.warn('DETENIENDO MONITOREO - Manipulacion del proxy detectada');
+    
+    // Notificar al servidor sobre la manipulación ANTES de detener el monitoreo
+    if (eventKey) {
+      try {
+        // Usar endpoint de logs de HTTP request como fallback si no existe endpoint específico de tampering
+        // O crear un log de tipo "security_alert"
+        await fetch(`${API_BASE_URL}/events/api/logging/http-request`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${eventKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            uri: `${reason}`,
+            type: 'proxy',
+            method: 'ALERT',
+            timestamp: new Date().toISOString(),
+            status_code: 403,
+            response_time: 0,
+            error: `${reason}`
+          })
+        });
+        console.log('Manipulacion reportada al servidor');
+      } catch (error) {
+        console.error('Error reportando manipulacion:', error);
+      }
+    }
+
+    // Emitir evento para que el frontend muestre advertencia
+    const windows = require('electron').BrowserWindow.getAllWindows();
+    if (windows.length > 0) {
+      windows[0].webContents.send('proxy-tampering', {
+        reason,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Esperar un momento para que el frontend reciba el evento y suba el video
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    // Detener capturas
+    stopCaptureInterval();
+    
+    // Detener monitoreo en el servidor
+    await stopMonitoring();
+    
+    // Forzar actualización de estado
+    isMonitoringActive = false;
+    
+  } catch (error) {
+    console.error('Error manejando manipulacion del proxy:', error);
+  } finally {
+    isHandlingTampering = false;
+  }
+};
+
 export const isProxySetup = async (): Promise<boolean> => {
   // En modo HTTP-only, verificar puerto fijo 8888 del LocalProxyServer
   const localProxyPort = 8888;
@@ -269,7 +366,7 @@ export const isProxySetup = async (): Promise<boolean> => {
       ],
       (error, output) => {
         const isConnected = output?.toString().trim() === "true";
-        console.log(`Proxy status: ${isConnected}`);
+        // console.log(`Proxy status: ${isConnected}`);
         resolve(isConnected);
         if (error) {
           console.error("Error ejecutando script:", error);
@@ -333,34 +430,34 @@ export const joinEvent = async (_eventKey: string) => {
 export const exitEvent = async () => {
   // Evitar ejecuciones duplicadas
   if (isExitingEvent) {
-    console.log('🔄 Salida de evento ya en progreso, evitando duplicacion');
+    console.log('Salida de evento ya en progreso, evitando duplicacion');
     return;
   }
   
   isExitingEvent = true;
   
   try {
-    console.log('🔄 Saliendo del evento...');
+    console.log('Saliendo del evento...');
     
     // 1. Detener monitoreo si está activo
     if (isMonitoringActive) {
-      console.log('🛑 Deteniendo monitoreo antes de salir...');
+      console.log('Deteniendo monitoreo antes de salir...');
       await stopMonitoring();
     }
     
     // 2. Detener y desconectar proxy completamente
     if (currentProxyPort || connectionManager.isConnected()) {
-      console.log('🔌 Desconectando proxy antes de salir...');
+      console.log('Desconectando proxy antes de salir...');
       await stopProxy();
     }
     
     // 3. CRÍTICO: Limpiar configuración del sistema como medida de seguridad
-    console.log('🧹 Limpiando configuración de proxy del sistema...');
+    console.log('Limpiando configuracion de proxy del sistema...');
     const success = await disableSystemProxy();
     if (success) {
-      console.log('✅ Configuracion de proxy limpiada correctamente');
+      console.log('Configuracion de proxy limpiada correctamente');
     } else {
-      console.warn('⚠️ Fallo la limpieza del proxy del sistema');
+      console.warn('Fallo la limpieza del proxy del sistema');
     }
     
     // 4. Limpiar variables globales
@@ -368,17 +465,17 @@ export const exitEvent = async () => {
     currentProxyPort = null;
     isMonitoringActive = false;
     
-    console.log('✅ Evento cerrado correctamente');
+    console.log('Evento cerrado correctamente');
     
   } catch (error) {
-    console.error('❌ Error cerrando evento:', error);
+    console.error('Error cerrando evento:', error);
     
     // Aunque haya error, intentar limpiar proxy como último recurso
     try {
-      console.log('🚨 Intentando limpieza de emergencia del proxy...');
+      console.log('Intentando limpieza de emergencia del proxy...');
       await disableSystemProxy();
     } catch (emergencyError) {
-      console.error('💥 Fallo limpieza de emergencia:', emergencyError);
+      console.error('Fallo limpieza de emergencia:', emergencyError);
     }
   } finally {
     isExitingEvent = false;
@@ -559,24 +656,24 @@ export const uploadMedia = async (data: ArrayBuffer) => {
 export const unsetProxySettings = async (): Promise<boolean> => {
   // Evitar ejecuciones duplicadas/múltiples
   if (isUnsettingProxy) {
-    console.log('🔄 Desactivacion de proxy ya en progreso, evitando duplicacion');
+    console.log('Desactivacion de proxy ya en progreso, evitando duplicacion');
     return false;
   }
   
   isUnsettingProxy = true;
-  console.log('🔄 Desactivando configuracion de proxy usando script UNSET...');
+  console.log('Desactivando configuracion de proxy usando script UNSET...');
   
   try {
     // 1. Detener solo el LocalProxyServer con timeout agresivo
     if (connectionManager && connectionManager.isConnected()) {
-      console.log('🛑 Deteniendo LocalProxyServer...');
+      console.log('Deteniendo LocalProxyServer...');
       try {
         await Promise.race([
           connectionManager.stopLocalServer(),
           new Promise(resolve => setTimeout(resolve, 1000)) // Solo esperar 1 segundo
         ]);
       } catch (error) {
-        console.warn('⚠️ Error o timeout deteniendo servidor, continuando...');
+        console.warn('Error o timeout deteniendo servidor, continuando...');
       }
     }
     
@@ -591,9 +688,9 @@ export const unsetProxySettings = async (): Promise<boolean> => {
         '-Command', scripts.UNSET_PROXY_SETTINGS
       ], { windowsHide: true, timeout: 3000 });
       
-      console.log('✅ Proxy desactivado correctamente usando UNSET_PROXY_SETTINGS');
+      console.log('Proxy desactivado correctamente usando UNSET_PROXY_SETTINGS');
     } else {
-      console.log('ℹ️ UNSET_PROXY_SETTINGS solo implementado para Windows');
+      console.log('UNSET_PROXY_SETTINGS solo implementado para Windows');
     }
     
     // 3. Limpiar estado local
@@ -601,7 +698,7 @@ export const unsetProxySettings = async (): Promise<boolean> => {
     
     return true;
   } catch (error) {
-    console.error('❌ Error ejecutando UNSET_PROXY_SETTINGS:', error);
+    console.error('Error ejecutando UNSET_PROXY_SETTINGS:', error);
     return false;
   } finally {
     isUnsettingProxy = false;

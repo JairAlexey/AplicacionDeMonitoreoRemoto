@@ -21,4 +21,4 @@ export const API_ROUTES = {
 // Helper para construir URLs completas
 export const getApiUrl = (route: string) => `${API_BASE_URL}${route}`;
 
-console.log(`[CONFIG] Usando API: ${API_BASE_URL} (${isDevelopment ? 'DESARROLLO' : 'PRODUCCIÓN'})`);
+console.log(`[CONFIG] Usando API: ${API_BASE_URL} (${isDevelopment ? 'DESARROLLO' : 'PRODUCCION'})`);

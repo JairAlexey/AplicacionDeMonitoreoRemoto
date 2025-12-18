@@ -52,7 +52,7 @@ export class LocalProxyServer extends EventEmitter {
  
       this.server.listen(this.localPort, 'localhost', () => {
         this.isRunning = true;
-        console.log(`🚀 Proxy local iniciado en localhost:${this.localPort}`);
+        console.log(`Proxy local iniciado en localhost:${this.localPort}`);
         this.emit('started', this.localPort);
         resolve(this.localPort);
       });
@@ -65,7 +65,7 @@ export class LocalProxyServer extends EventEmitter {
   private async handleHTTPRequest(req: http.IncomingMessage, res: http.ServerResponse) {
     try {
       const targetUrl = req.url!;
-      console.log(`📡 HTTP Request: ${req.method} ${targetUrl}`);
+      // console.log(`HTTP Request: ${req.method} ${targetUrl}`);
  
       // Validar con el servidor remoto
       const validation = await this.validateUrlWithServer(req.method!, targetUrl, req.headers);
@@ -95,7 +95,7 @@ export class LocalProxyServer extends EventEmitter {
   ) {
     try {
       const targetUrl = `https://${req.url}`;
-      console.log(`🔒 HTTPS CONNECT: ${targetUrl}`);
+      // console.log(`HTTPS CONNECT: ${targetUrl}`);
  
       // Validar con el servidor remoto
       const originalHeaders = { ...req.headers };
@@ -139,6 +139,7 @@ export class LocalProxyServer extends EventEmitter {
         headers: {
           'Authorization': `Bearer ${this.config.eventKey}`,
           'Content-Type': 'application/json',
+          'X-Proxy-Signature': 'LocalProxyServer-v1', // Firma de seguridad
         },
         body: JSON.stringify({
           method: method,
@@ -201,7 +202,7 @@ export class LocalProxyServer extends EventEmitter {
       });
  
       proxyReq.on('error', (error) => {
-        console.error(`Error haciendo petición a ${targetUrl}:`, error);
+        console.error(`Error haciendo peticion a ${targetUrl}:`, error);
         if (!res.headersSent) {
           this.sendErrorResponse(res, 502, 'Error conectando al sitio web');
         }

@@ -17,7 +17,7 @@ const Toast: React.FC<ToastProps> = ({ message, onClose, duration }) => {
 
   return (
     <div
-      className="fixed right-0 top-5 animate-toast-slide-in rounded bg-white p-4 text-black shadow-lg"
+      className="fixed right-0 top-5 z-[9999] animate-toast-slide-in rounded bg-white p-4 text-black shadow-lg"
       style={{
         minWidth: '200px',
         transform: 'translateX(100%)',
