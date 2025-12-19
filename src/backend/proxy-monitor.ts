@@ -154,13 +154,23 @@ export class ProxyMonitor extends EventEmitter {
       
       // Parsear servidor:puerto
       let server = 'localhost';
-      let port = 8888;
+      let port = -1; // Default a -1 para que falle si no se puede parsear
 
       if (result.server) {
-        const parts = result.server.split(':');
-        if (parts.length === 2) {
-          server = parts[0];
-          port = parseInt(parts[1], 10);
+        // Eliminar protocolo si existe (http://, https://)
+        const cleanServer = result.server.replace(/https?:\/\//, '');
+        
+        // Buscar el último dos puntos para separar puerto
+        const lastColonIndex = cleanServer.lastIndexOf(':');
+        
+        if (lastColonIndex !== -1) {
+          server = cleanServer.substring(0, lastColonIndex);
+          const portStr = cleanServer.substring(lastColonIndex + 1);
+          const parsedPort = parseInt(portStr, 10);
+          port = isNaN(parsedPort) ? -1 : parsedPort;
+        } else {
+          // Si no hay puerto explícito, asumir 80 o mantener -1
+          server = cleanServer;
         }
       }
 

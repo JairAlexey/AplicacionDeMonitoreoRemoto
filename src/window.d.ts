@@ -12,8 +12,8 @@ interface Window {
     isProxySetup: () => Promise<boolean>;
     getScreenInfo: () => Promise<any>;
     stopCaptureInterval: () => void;
-    stopMonitoring: () => Promise<void>;
-    startMonitoring: () => Promise<void>;
+    stopMonitoring: () => Promise<boolean>;
+    startMonitoring: () => Promise<boolean>;
     startCaptureInterval: () => void;
     captureDesktop: () => Promise<void>;
     uploadMedia: (arrayBuffer: ArrayBuffer) => Promise<void>;

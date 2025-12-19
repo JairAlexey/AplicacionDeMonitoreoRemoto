@@ -1,7 +1,7 @@
 import { EventEmitter } from "events";
+import { execFileSync } from "child_process";
 import { PROXY_SCRIPTS } from "./constants";
 import { API_BASE_URL } from "./config";
-import { execFileSync } from "child_process";
 import { LocalProxyServer } from "./local-proxy-server";
 import { proxyMonitor } from "./proxy-monitor";
 
@@ -98,6 +98,9 @@ class ConnectionManager extends EventEmitter {
       // Iniciar monitoreo de integridad del proxy
       proxyMonitor.updateExpectedPort(localPort);
       proxyMonitor.start();
+      
+      // Limpiar listeners previos para evitar duplicados
+      proxyMonitor.removeAllListeners('tampering-detected');
       
       // Manejar manipulación detectada
       proxyMonitor.on('tampering-detected', async (data) => {

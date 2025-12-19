@@ -253,19 +253,41 @@ export const startMonitoring = async () => {
 export const stopMonitoring = async () => {
   try {
     if (!eventKey) throw new Error('No event key');
-    const res = await fetch(`${API_BASE_URL}/proxy/stop-monitoring/`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${eventKey}`,
-      },
-    });
-    if (res.ok) {
-      isMonitoringActive = false;
-      // Actualiza el proxy local para que deje de validar URLs
-      connectionManager.updateProxyConfig({ isMonitoring: false });
-      console.log('Monitoreo detenido - estado guardado');
+    
+    // Implementar retry simple (3 intentos)
+    let attempts = 0;
+    const maxAttempts = 3;
+    
+    while (attempts < maxAttempts) {
+      try {
+        const res = await fetch(`${API_BASE_URL}/proxy/stop-monitoring/`, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${eventKey}`,
+          },
+        });
+        
+        if (res.ok) {
+          isMonitoringActive = false;
+          connectionManager.updateProxyConfig({ isMonitoring: false });
+          console.log('Monitoreo detenido - estado guardado');
+          return true;
+        }
+        // Si el servidor responde con error (no 200), no reintentar si es 4xx
+        if (res.status >= 400 && res.status < 500) {
+           console.error(`Stop monitoring failed with client error: ${res.status}`);
+           break;
+        }
+      } catch (e) {
+        console.warn(`Intento ${attempts + 1} de detener monitoreo fallido:`, e);
+      }
+      attempts++;
+      if (attempts < maxAttempts) await new Promise(r => setTimeout(r, 1000));
     }
-    return res.ok;
+    
+    // Si fallaron todos los intentos, forzar estado local a false de todas formas
+    isMonitoringActive = false;
+    return false;
   } catch (error) {
     console.error('stopMonitoring error:', error);
     return false;
@@ -506,29 +528,29 @@ export const captureDesktop = async () => {
       },
     });
 
-    // Usar Promise.all para esperar a que todas las capturas se envíen
-    await Promise.all(sources.map(async (source, index) => {
-      if (!source) {
-        console.error("No screen found.");
-        return;
-      }
+    // Usar Promise.allSettled para que si falla una pantalla, las otras sigan funcionando
+    const results = await Promise.allSettled(sources.map(async (source, index) => {
+      if (!source) return;
+      
       const screenSource = source;
       
       // Renombrar monitores para que sean más amigables (Screen 1, Screen 2, etc.)
-      // Si el nombre original es "Entire Screen" o similar, usar el índice
       let friendlyName = screenSource.name;
-      if (friendlyName.toLowerCase().includes("screen") || friendlyName.toLowerCase().includes("pantalla") || friendlyName.toLowerCase().includes("display")) {
+      // Siempre usar Screen X para consistencia si detectamos nombres genéricos
+      if (friendlyName.toLowerCase().includes("screen") || 
+          friendlyName.toLowerCase().includes("pantalla") || 
+          friendlyName.toLowerCase().includes("display") ||
+          friendlyName === "Entire Screen") {
          friendlyName = `Screen ${index + 1}`;
       }
       
-      console.log(`Capturing screen: ${friendlyName} (Original: ${screenSource.name})`);
+      // console.log(`Capturing screen: ${friendlyName}`);
 
       const image = nativeImage.createFromDataURL(
         screenSource.thumbnail.toDataURL(),
       );
 
       const buffer = image.toPNG();
-      // Convert Node Buffer to Uint8Array for Blob constructor
       const uint8Array = new Uint8Array(buffer);
 
       const formData = new FormData();
@@ -553,9 +575,15 @@ export const captureDesktop = async () => {
       if (!response.ok) {
         throw new Error(`API error: ${response.statusText}`);
       }
-
-      console.log(`Screenshot sent successfully for ${friendlyName}.`);
     }));
+    
+    // Loguear errores si los hubo
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        console.error(`Error capturing screen ${index + 1}:`, result.reason);
+      }
+    });
+    
   } catch (error) {
     console.error(`Error capturing screen: ${error}`);
   }

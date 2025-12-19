@@ -1,7 +1,6 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import {
-  FaCheckCircle,
   FaDesktop,
   FaMicrophone,
   FaTimesCircle,
@@ -11,6 +10,7 @@ import {
   FaBackspace,
   FaTimes,
   FaSyncAlt,
+  FaCheckCircle,
 } from "react-icons/fa";
 import CustomTitleBar from "./ui/CustomTitleBar";
 import Toast from "./ui/ToastNotification";
@@ -87,8 +87,11 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
         const durationMinutes = verification.event.duration || 0;
         eventDurationRef.current = durationMinutes * 60; // Guardar duración total en segundos
         
-        // monitoring_total_duration viene del backend (solo se actualiza cuando se detiene monitoreo)
-        const monitoringTotalSeconds = verification.participant.monitoring_total_duration || 0;
+        // Priorizar el tiempo total calculado por el backend (incluye sesión actual)
+        // Si no existe (versión vieja del backend), usar el campo raw
+        const monitoringTotalSeconds = verification.connectionInfo?.totalTimeSeconds ?? 
+                                     verification.participant.monitoring_total_duration ?? 0;
+                                     
         const totalSeconds = Math.max(eventDurationRef.current - monitoringTotalSeconds, 0);
         setRemainingSeconds(totalSeconds);
       }
@@ -269,6 +272,13 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
           }));
           setToastMessage("⚠️ Proxy desactivado");
           setShowToast(true);
+
+          // CRÍTICO: Si estamos grabando y el proxy se cae, detener inmediatamente
+          // Esto cubre el caso donde el monitor del backend falla o tarda en detectar
+          if (isRecording) {
+            console.warn("⚠️ Proxy desconectado durante grabación - Deteniendo...");
+            stopRecording();
+          }
         } else if (isProxyConnected && !isProxyValid && !isBlocked) {
           // Proxy se reconectó (y no está bloqueado)
           setIsProxyValid(true);
@@ -349,8 +359,21 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
         const videoTracks = streamRef.current.getVideoTracks();
         const audioTracks = streamRef.current.getAudioTracks();
         
-        setHasCameraAccess(videoTracks.length > 0 && videoTracks[0]?.readyState === "live");
-        setHasMicrophoneAccess(audioTracks.length > 0 && audioTracks[0]?.readyState === "live");
+        // Verificar readyState, enabled y muted
+        const videoTrack = videoTracks[0];
+        const isCameraWorking = videoTrack !== undefined && 
+                               videoTrack.readyState === "live" && 
+                               videoTrack.enabled && 
+                               !videoTrack.muted;
+                               
+        const audioTrack = audioTracks[0];
+        const isMicWorking = audioTrack !== undefined && 
+                            audioTrack.readyState === "live" && 
+                            audioTrack.enabled && 
+                            !audioTrack.muted;
+
+        setHasCameraAccess(isCameraWorking);
+        setHasMicrophoneAccess(isMicWorking);
       } else {
         // No hay stream activo, intentar crear uno de prueba para verificar disponibilidad real
         let testStream: MediaStream | null = null;
@@ -361,9 +384,26 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
             audio: true,
           });
 
-          // Si llegamos aquí, los dispositivos están disponibles y no están siendo usados
-          setHasCameraAccess(true);
-          setHasMicrophoneAccess(true);
+          const videoTracks = testStream.getVideoTracks();
+          const audioTracks = testStream.getAudioTracks();
+
+          // Verificar estado inicial de los tracks
+          const videoTrack = videoTracks[0];
+          const isCameraWorking = videoTrack !== undefined && 
+                                 videoTrack.readyState === "live" && 
+                                 !videoTrack.muted;
+                                 
+          const audioTrack = audioTracks[0];
+          const isMicWorking = audioTrack !== undefined && 
+                              audioTrack.readyState === "live" && 
+                              !audioTrack.muted;
+
+          setHasCameraAccess(isCameraWorking);
+          setHasMicrophoneAccess(isMicWorking);
+
+          if (!isMicWorking) {
+             console.warn("Micrófono detectado pero está silenciado (muted)");
+          }
 
           // Liberar el stream de prueba inmediatamente
           testStream.getTracks().forEach((track) => track.stop());
@@ -479,7 +519,7 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
       window.api.stopCaptureInterval();
 
       // Usar la función personalizada de cleanup
-      if ((mediaRecorder as any).stopAndUpload) {
+      if (mediaRecorder && typeof (mediaRecorder as any).stopAndUpload === 'function') {
         await (mediaRecorder as any).stopAndUpload();
       }
 
@@ -534,7 +574,7 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
           startLocalTimer();
           
           // Solo iniciar grabación si el monitoreo se inició correctamente
-          if ((mediaRecorder as any).startCustomRecording) {
+          if (typeof (mediaRecorder as any).startCustomRecording === 'function') {
             (mediaRecorder as any).startCustomRecording();
           }
           
@@ -575,6 +615,26 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
       // Monitorear el estado de los tracks en tiempo real
       const videoTracks = stream.getVideoTracks();
       const audioTracks = stream.getAudioTracks();
+
+      // Verificación inicial inmediata del estado de los tracks
+      const videoTrack = videoTracks[0];
+      const isCameraWorking = videoTrack !== undefined && 
+                             videoTrack.readyState === "live" && 
+                             !videoTrack.muted;
+                             
+      const audioTrack = audioTracks[0];
+      const isMicWorking = audioTrack !== undefined && 
+                          audioTrack.readyState === "live" && 
+                          !audioTrack.muted;
+
+      setHasCameraAccess(isCameraWorking);
+      setHasMicrophoneAccess(isMicWorking);
+
+      if (!isMicWorking) {
+        console.warn("Micrófono iniciado pero está silenciado (muted)");
+        setToastMessage("⚠️ Tu micrófono está silenciado o en uso");
+        setShowToast(true);
+      }
 
       // Listener para detectar cuando se detiene el video
       videoTracks.forEach(track => {
@@ -749,18 +809,33 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
         const videoTracks = streamRef.current.getVideoTracks();
         const audioTracks = streamRef.current.getAudioTracks();
         
-        const cameraActive = videoTracks.length > 0 && videoTracks[0]?.readyState === "live";
-        const micActive = audioTracks.length > 0 && audioTracks[0]?.readyState === "live";
+        // Verificar readyState, enabled y muted (consistente con checkMediaAccess)
+        const videoTrack = videoTracks[0];
+        const cameraActive = videoTrack !== undefined && 
+                            videoTrack.readyState === "live" && 
+                            videoTrack.enabled && 
+                            !videoTrack.muted;
+                            
+        const audioTrack = audioTracks[0];
+        const micActive = audioTrack !== undefined && 
+                         audioTrack.readyState === "live" && 
+                         audioTrack.enabled && 
+                         !audioTrack.muted;
 
         // Si alguno de los permisos se perdió, detener el monitoreo
         if (!cameraActive || !micActive) {
-          console.warn("Permisos perdidos durante la grabación - deteniendo monitoreo");
+          console.warn(`Dispositivos perdidos durante grabación: Cam=${cameraActive}, Mic=${micActive}`);
           setHasCameraAccess(cameraActive);
           setHasMicrophoneAccess(micActive);
+          
+          if (!micActive) setToastMessage("⚠️ Micrófono silenciado o desconectado");
+          else if (!cameraActive) setToastMessage("⚠️ Cámara desconectada o en uso");
+          
+          setShowToast(true);
           await stopRecording();
         }
       }
-    }, 500); // Verificar cada 500ms
+    }, 1000); // Verificar cada 1s (menos agresivo que 500ms)
 
     return () => {
       clearInterval(monitorInterval);
@@ -844,6 +919,16 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
     // Llamar directamente a onExit que ahora es simple y rapido
     onExit();
   };
+
+  const isTimeExhausted = remainingSeconds !== null && remainingSeconds <= 0;
+  const isStartDisabled = !isRecording && (
+    !hasCameraAccess || 
+    !hasMicrophoneAccess || 
+    !hasScreenAccess || 
+    !isProxyValid || 
+    eventStatus.status === "No tracking" ||
+    isTimeExhausted
+  );
 
   return (
     <div className="fixed inset-0 w-screen h-screen flex flex-col bg-gray-800">
@@ -977,15 +1062,12 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
           <div className="mt-4 flex w-full flex-col gap-2">
             <button
               onClick={toggleRecording}
-              disabled={
-                // Solo deshabilitar para EMPEZAR si no hay permisos o proxy no válido, pero siempre permitir DETENER
-                !isRecording && (!hasCameraAccess || !hasMicrophoneAccess || !hasScreenAccess || !isProxyValid || eventStatus.status === "No tracking")
-              }
+              disabled={isStartDisabled}
               className={`w-full rounded-md py-2 px-3 text-sm font-semibold transition-all transform flex items-center justify-center gap-2 shadow-lg ${
                 isRecording
                   ? "bg-red-600 text-white hover:bg-red-700 hover:scale-105"
                   : "bg-blue-600 text-white hover:bg-blue-700 hover:scale-105"
-              } ${(!isRecording && (!hasCameraAccess || !hasMicrophoneAccess || !hasScreenAccess || !isProxyValid || eventStatus.status === "No tracking")) && "cursor-not-allowed opacity-50 hover:scale-100"}`}
+              } ${isStartDisabled && "cursor-not-allowed opacity-50 hover:scale-100"}`}
             >
               {isRecording ? (
                 <>
@@ -995,7 +1077,7 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
               ) : (
                 <>
                   <FaRegPlayCircle size={14} />
-                  Empezar monitoreo
+                  {isTimeExhausted ? "Tiempo Agotado" : "Empezar monitoreo"}
                 </>
               )}
             </button>
