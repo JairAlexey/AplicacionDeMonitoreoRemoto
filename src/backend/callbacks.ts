@@ -1,7 +1,7 @@
 import { nativeImage, desktopCapturer, screen, app, BrowserWindow } from "electron";
 import { PROXY_SCRIPTS } from "./constants";
 import { API_BASE_URL } from "./config";
-import { execFile } from "child_process";
+import { execFile, execFileSync } from "child_process";
 import { EvalTechAPI } from "../frontend/api";
 import { connectionManager } from "./connection-manager";
 let eventKey: string = "";
@@ -72,8 +72,6 @@ export const disableSystemProxy = async (): Promise<boolean> => {
   console.log('🛠️ Desactivando proxy del sistema...');
   
   try {
-    const { execFileSync } = require('child_process');
-    
     if (process.platform === 'win32') {
       // Windows: Desactivar proxy usando registro de Windows (metodo mas confiable)
       let success = false;
@@ -343,7 +341,7 @@ export const handleProxyTampering = async (reason: string) => {
     }
 
     // Emitir evento para que el frontend muestre advertencia
-    const windows = require('electron').BrowserWindow.getAllWindows();
+    const windows = BrowserWindow.getAllWindows();
     if (windows.length > 0) {
       windows[0].webContents.send('proxy-tampering', {
         reason,
