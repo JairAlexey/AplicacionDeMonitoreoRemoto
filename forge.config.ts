@@ -6,7 +6,7 @@ import { VitePlugin } from "@electron-forge/plugin-vite";
 const config: ForgeConfig = {
   packagerConfig: {
     asar: false,
-    icon: "./src/frontend/assets/images/logo.ico",
+    icon: "./src/frontend/assets/images/LogoAplicacion.ico",
     name: "EvalTech Monitor",
     executableName: "EvalTech-Monitor",
   },
@@ -18,7 +18,7 @@ const config: ForgeConfig = {
       name: "EvalTech_Monitor",
       authors: "EvalTech",
       description: "Aplicación de Monitoreo Remoto",
-      setupIcon: "./src/frontend/assets/images/logo.ico",
+      setupIcon: "./src/frontend/assets/images/LogoAplicacion.ico",
     }),
     new MakerZIP({}, ["darwin"]),
   ],

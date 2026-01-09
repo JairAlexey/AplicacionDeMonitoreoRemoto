@@ -37,7 +37,7 @@ const createWindow = () => {
     alwaysOnTop: false, // Ya no forzamos que esté siempre encima
     x: width - winWidth - margin,
     y: height - winHeight - margin,
-    icon: path.join(__dirname, "../renderer/main_window/assets/images/logo.ico"),
+    icon: path.join(__dirname, "../renderer/main_window/assets/images/LogoAplicacion.ico"),
     backgroundColor: '#ffffff',
     show: false, // No mostrar hasta que esté cargado
     webPreferences: {
