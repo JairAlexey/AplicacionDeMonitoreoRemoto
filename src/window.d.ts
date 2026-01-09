@@ -5,6 +5,7 @@ interface Window {
     removeProxyTamperingListener: () => void;
     onAppClosing: (callback: () => void) => void;
     verifyEventKey: (eventKey: string) => Promise<any>;
+    registerConsent: (eventKey: string) => Promise<{ success: boolean; consent?: any; error?: string }>;
     joinEvent: (eventKey: string) => Promise<boolean>;
     exitEvent: () => Promise<void>;
     startProxy: () => Promise<boolean>;

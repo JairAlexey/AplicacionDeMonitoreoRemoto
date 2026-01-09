@@ -15,6 +15,7 @@ const registry = {
   stopCaptureInterval: true,
   uploadMedia: true,
   verifyEventKey: true,
+  registerConsent: true,
   minimizeWindow: true,
   appReady: true,
 };

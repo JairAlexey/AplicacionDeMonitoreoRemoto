@@ -427,6 +427,7 @@ export const verifyEventKey = async (_eventKey: string) => {
       dateIsValid: data.dateIsValid,
       participant: data.participant,
       event: data.event,
+      consentRequired: data.consentRequired,
       error: data.error,
       specificError: data.specificError
     };
@@ -436,6 +437,47 @@ export const verifyEventKey = async (_eventKey: string) => {
       dateIsValid: false,
       error: "Error de conexión con el servidor",
       specificError: false
+    };
+  }
+};
+
+export const registerConsent = async (_eventKey: string) => {
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/events/api/consent/register`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${_eventKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          accepted: true,
+          consent_version: 'v1.0'
+        }),
+      },
+    );
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      console.error('Error registrando consentimiento:', errorData);
+      return {
+        success: false,
+        error: errorData.error || 'Error al registrar el consentimiento'
+      };
+    }
+
+    const data = await response.json();
+    console.log('Consentimiento registrado exitosamente:', data);
+    return {
+      success: true,
+      consent: data.consent
+    };
+  } catch (error) {
+    console.error('Error de conexión al registrar consentimiento:', error);
+    return {
+      success: false,
+      error: 'Error de conexión con el servidor'
     };
   }
 };
