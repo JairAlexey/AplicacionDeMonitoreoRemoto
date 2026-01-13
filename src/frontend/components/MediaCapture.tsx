@@ -230,9 +230,12 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
         
         try {
           const verification = await window.api.verifyEventKey(eventKey);
+          const isExplicitlyBlocked =
+            typeof verification?.error === "string" &&
+            verification.error.toLowerCase().includes("bloqueado por el administrador");
           
           if (!verification || !verification.isValid) {
-            isBlocked = true;
+            isBlocked = isExplicitlyBlocked;
             isProxyConnected = false;
           } else {
             // Si la verificación es exitosa, el proxy está funcionando
@@ -241,7 +244,7 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
         } catch (error) {
           // Si hay error en la verificación, asumir problema de conexión
           console.error('Error verificando estado:', error);
-          isBlocked = true;
+          isBlocked = false;
           isProxyConnected = false;
         }
         
@@ -530,6 +533,13 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
     try {
       // ✅ MARCAR COMO "DETENIENDO" INMEDIATAMENTE (antes de cualquier operación)
       setIsStopping(true);
+
+      // Stop local timer immediately so countdown pauses while uploads finish
+      isMonitoringActiveRef.current = false;
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+        timerIntervalRef.current = null;
+      }
       
       // Stop creating new logs locally
       window.api.stopCaptureInterval();
