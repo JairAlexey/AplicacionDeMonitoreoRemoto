@@ -576,6 +576,100 @@ export const minimizeWindow = () => {
 };
 
 //*************** DESKTOP CAPTURE FUNCTIONS ***************
+type PresignedUploadResponse = {
+  upload_url: string;
+  s3_key: string;
+  headers: Record<string, string>;
+};
+
+const requestPresignedUpload = async (
+  endpoint: string,
+  payload: Record<string, unknown> = {},
+): Promise<PresignedUploadResponse> => {
+  if (!eventKey) {
+    throw new Error("No event key");
+  }
+
+  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${eventKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    throw new Error(`Presign failed: ${response.status} - ${errorText}`);
+  }
+
+  const data = (await response.json()) as Partial<PresignedUploadResponse>;
+  if (!data.upload_url || !data.s3_key || !data.headers) {
+    throw new Error("Presign response missing required fields");
+  }
+
+  return {
+    upload_url: data.upload_url,
+    s3_key: data.s3_key,
+    headers: data.headers as Record<string, string>,
+  };
+};
+
+const uploadWithPresignedUrl = async (
+  uploadUrl: string,
+  blob: Blob,
+  headers: Record<string, string>,
+) => {
+  const response = await fetch(uploadUrl, {
+    method: "PUT",
+    headers,
+    body: blob,
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    throw new Error(`S3 upload failed: ${response.status} - ${errorText}`);
+  }
+};
+
+const logScreenCapture = async (s3Key: string, monitorName: string) => {
+  const response = await fetch(`${API_BASE_URL}${EvalTechAPI.screenCapture}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${eventKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      s3_key: s3Key,
+      monitor_name: monitorName,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    throw new Error(`Log screenshot failed: ${response.status} - ${errorText}`);
+  }
+};
+
+const logMediaCapture = async (s3Key: string) => {
+  const response = await fetch(`${API_BASE_URL}${EvalTechAPI.mediaCapture}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${eventKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      s3_key: s3Key,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => "");
+    throw new Error(`Log media failed: ${response.status} - ${errorText}`);
+  }
+};
+
 export const captureDesktop = async () => {
   try {
     const primaryDisplay = screen.getPrimaryDisplay();
@@ -611,15 +705,43 @@ export const captureDesktop = async () => {
         screenSource.thumbnail.toDataURL(),
       );
 
-      const buffer = image.toPNG();
-      const uint8Array = new Uint8Array(buffer);
+      const buffer = image.toJPEG(80);
+      const blob = new Blob([buffer], { type: "image/jpeg" });
+      const filename = "screenshot.jpg";
+
+      let presignData: PresignedUploadResponse | null = null;
+      try {
+        presignData = await requestPresignedUpload(EvalTechAPI.screenPresign);
+      } catch (error) {
+        console.warn(
+          "[SCREEN] Presign failed, falling back to backend upload:",
+          error,
+        );
+      }
+
+      if (presignData) {
+        try {
+          await uploadWithPresignedUrl(
+            presignData.upload_url,
+            blob,
+            presignData.headers,
+          );
+        } catch (error) {
+          console.warn(
+            "[SCREEN] S3 upload failed, falling back to backend upload:",
+            error,
+          );
+          presignData = null;
+        }
+      }
+
+      if (presignData) {
+        await logScreenCapture(presignData.s3_key, friendlyName);
+        return;
+      }
 
       const formData = new FormData();
-      formData.append(
-        "screenshot",
-        new Blob([uint8Array], { type: "image/png" }),
-        "screenshot.png",
-      );
+      formData.append("screenshot", blob, filename);
       formData.append("monitor_name", friendlyName);
 
       const response = await fetch(
@@ -725,6 +847,42 @@ export const uploadMedia = async (data: ArrayBuffer) => {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const filename = `recording_${timestamp}.webm`;
 
+    let presignData: PresignedUploadResponse | null = null;
+    try {
+      presignData = await requestPresignedUpload(EvalTechAPI.mediaPresign, {
+        media_type: "video",
+      });
+    } catch (error) {
+      console.warn(
+        "[UPLOAD] Presign failed, falling back to backend upload:",
+        error,
+      );
+    }
+
+    if (presignData) {
+      try {
+        await uploadWithPresignedUrl(
+          presignData.upload_url,
+          blob,
+          presignData.headers,
+        );
+      } catch (error) {
+        console.warn(
+          "[UPLOAD] S3 upload failed, falling back to backend upload:",
+          error,
+        );
+        presignData = null;
+      }
+    }
+
+    if (presignData) {
+      await logMediaCapture(presignData.s3_key);
+      console.log(
+        `[UPLOAD] Video segment uploaded to S3: ${filename} (${(blob.size / 1024).toFixed(2)} KB)`,
+      );
+      return;
+    }
+
     const formData = new FormData();
     formData.append("media", blob, filename);
 
@@ -743,8 +901,10 @@ export const uploadMedia = async (data: ArrayBuffer) => {
       const errorText = await response.text();
       throw new Error(`Upload failed: ${response.status} - ${errorText}`);
     }
-    
-    console.log(`[UPLOAD] Video segment sent: ${filename} (${(blob.size / 1024).toFixed(2)} KB)`);
+
+    console.log(
+      `[UPLOAD] Video segment sent: ${filename} (${(blob.size / 1024).toFixed(2)} KB)`,
+    );
   } catch (error) {
     console.error("[UPLOAD] Error:", error);
     throw error; // Re-lanzar para que el caller lo maneje
