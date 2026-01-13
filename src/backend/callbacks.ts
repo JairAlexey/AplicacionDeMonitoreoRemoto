@@ -177,32 +177,38 @@ export const stopProxy = async () => {
   
   isStoppingProxy = true;
   
-  // Timeout de seguridad para liberar el lock en caso de error
+  // Timeout de seguridad reducido para respuesta más rápida
   const safetyTimeout = setTimeout(() => {
     console.warn('⚠️ Timeout de seguridad: liberando lock de stopProxy');
     isStoppingProxy = false;
-  }, 10000); // 10 segundos
+  }, 3000); // 3 segundos (reducido de 10)
   
   try {
     console.log('Deteniendo proxy...');
     
-    // 1. Desconectar connection manager (ya incluye disableSystemProxy)
-    await connectionManager.disconnect();
+    // 1. Desconectar connection manager con timeout
+    await Promise.race([
+      connectionManager.disconnect(),
+      new Promise((resolve) => setTimeout(resolve, 2000))
+    ]);
     
-    // 2. Limpiar estado local
+    // 2. Limpiar estado local inmediatamente
     currentProxyPort = null;
     
-    console.log('Proxy limpiado exitosamente');
+    console.log('✅ Proxy limpiado exitosamente');
     
   } catch (error) {
-    console.error('Error deteniendo proxy:', error);
+    console.error('❌ Error deteniendo proxy:', error);
     
-    // Intentar limpieza de emergencia
+    // Limpieza de emergencia rápida
     try {
-      console.log('Limpieza de emergencia del proxy...');
-      await disableSystemProxy();
+      console.log('🔧 Limpieza de emergencia del proxy...');
+      await Promise.race([
+        disableSystemProxy(),
+        new Promise((resolve) => setTimeout(resolve, 1000))
+      ]);
     } catch (emergencyError) {
-      console.error('Fallo limpieza de emergencia:', emergencyError);
+      console.error('❌ Fallo limpieza de emergencia:', emergencyError);
     }
   } finally {
     clearTimeout(safetyTimeout);
@@ -254,42 +260,57 @@ export const stopMonitoring = async () => {
   try {
     if (!eventKey) throw new Error('No event key');
     
-    // Implementar retry simple (3 intentos)
-    let attempts = 0;
-    const maxAttempts = 3;
-    
-    while (attempts < maxAttempts) {
+    // Timeout agresivo: 5 segundos máximo para toda la operación
+    const stopWithTimeout = async () => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      
       try {
         const res = await fetch(`${API_BASE_URL}/proxy/stop-monitoring/`, {
           method: 'POST',
           headers: {
             Authorization: `Bearer ${eventKey}`,
           },
+          signal: controller.signal
         });
         
+        clearTimeout(timeoutId);
+        
         if (res.ok) {
-          isMonitoringActive = false;
-          connectionManager.updateProxyConfig({ isMonitoring: false });
-          console.log('Monitoreo detenido - estado guardado');
+          console.log('✅ Monitoreo detenido en backend');
           return true;
+        } else if (res.status >= 400 && res.status < 500) {
+          console.warn(`⚠️ Stop monitoring: client error ${res.status}`);
+          return false;
         }
-        // Si el servidor responde con error (no 200), no reintentar si es 4xx
-        if (res.status >= 400 && res.status < 500) {
-           console.error(`Stop monitoring failed with client error: ${res.status}`);
-           break;
-        }
+        return false;
       } catch (e) {
-        console.warn(`Intento ${attempts + 1} de detener monitoreo fallido:`, e);
+        clearTimeout(timeoutId);
+        if (e instanceof Error && e.name === 'AbortError') {
+          console.warn('⏱️ Timeout deteniendo monitoreo en backend');
+        } else {
+          console.warn('⚠️ Error deteniendo monitoreo:', e);
+        }
+        return false;
       }
-      attempts++;
-      if (attempts < maxAttempts) await new Promise(r => setTimeout(r, 1000));
-    }
+    };
     
-    // Si fallaron todos los intentos, forzar estado local a false de todas formas
+    // Intentar detener en backend (1 solo intento con timeout)
+    await stopWithTimeout();
+    
+    // SIEMPRE actualizar estado local inmediatamente
     isMonitoringActive = false;
-    return false;
+    connectionManager.updateProxyConfig({ isMonitoring: false });
+    console.log('✅ Monitoreo detenido localmente');
+    
+    return true;
   } catch (error) {
-    console.error('stopMonitoring error:', error);
+    console.error('❌ stopMonitoring error:', error);
+    // Forzar estado local a false de todas formas
+    isMonitoringActive = false;
+    try {
+      connectionManager.updateProxyConfig({ isMonitoring: false });
+    } catch {}
     return false;
   }
 };

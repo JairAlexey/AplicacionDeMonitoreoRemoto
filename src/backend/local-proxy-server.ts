@@ -16,6 +16,9 @@ export class LocalProxyServer extends EventEmitter {
   private config: ProxyConfig;
   private isRunning: boolean = false;
   private localPort: number = 8888;
+  // Caché de validación de URLs para reducir peticiones al backend
+  private validationCache: Map<string, { blocked: boolean; reason?: string; timestamp: number }> = new Map();
+  private readonly CACHE_TTL = 60000; // 60 segundos de caché
  
   constructor(config: ProxyConfig) {
     super();
@@ -119,7 +122,7 @@ export class LocalProxyServer extends EventEmitter {
   }
  
   /**
-   * Valida URL con el servidor remoto via HTTP
+   * Valida URL con el servidor remoto via HTTP (con caché)
    */
   private async validateUrlWithServer(
     method: string,
@@ -131,40 +134,72 @@ export class LocalProxyServer extends EventEmitter {
       // Si no está monitoreando, permite la URL sin consultar al backend
       return { blocked: false };
     }
+
+    // Extraer hostname para usar como clave de caché
+    const hostname = new URL(targetUrl).hostname.toLowerCase();
+    const cacheKey = `${hostname}_${method}`;
+    
+    // Verificar caché primero
+    const cached = this.validationCache.get(cacheKey);
+    if (cached && (Date.now() - cached.timestamp < this.CACHE_TTL)) {
+      // console.log(`[CACHE HIT] ${cacheKey}`);
+      return { blocked: cached.blocked, reason: cached.reason };
+    }
+
     try {
       const validationUrl = `${this.config.apiBaseUrl}/proxy/validate/`;
+
+      // Timeout de 3 segundos para no bloquear la navegación
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3000);
 
       const response = await fetch(validationUrl, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${this.config.eventKey}`,
           'Content-Type': 'application/json',
-          'X-Proxy-Signature': 'LocalProxyServer-v1', // Firma de seguridad
+          'X-Proxy-Signature': 'LocalProxyServer-v1',
         },
         body: JSON.stringify({
           method: method,
           url: targetUrl,
           headers: Object.fromEntries(Object.entries(headers)),
           timestamp: new Date().toISOString()
-        })
+        }),
+        signal: controller.signal
       });
+
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         console.error(`Error validando URL: ${response.status} ${response.statusText}`);
-        // En caso de error, bloquear por seguridad
-        return { blocked: true, reason: 'Error de validación' };
+        // En caso de error, permitir por defecto para no bloquear navegación
+        const result = { blocked: false };
+        this.validationCache.set(cacheKey, { ...result, timestamp: Date.now() });
+        return result;
       }
 
       const result = await response.json();
-      return {
+      const validationResult = {
         blocked: result.blocked || false,
         reason: result.reason || 'Sitio no permitido'
       };
 
+      // Guardar en caché
+      this.validationCache.set(cacheKey, { ...validationResult, timestamp: Date.now() });
+      
+      return validationResult;
+
     } catch (error) {
-      console.error('Error conectando con servidor:', error);
-      // En caso de error de conexión, bloquear por seguridad
-      return { blocked: true, reason: 'Sin conexión al servidor' };
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.warn('Timeout validando URL, permitiendo por defecto');
+      } else {
+        console.error('Error conectando con servidor:', error);
+      }
+      // En caso de timeout o error, permitir para no bloquear navegación
+      const result = { blocked: false };
+      this.validationCache.set(cacheKey, { ...result, timestamp: Date.now() });
+      return result;
     }
   }
  

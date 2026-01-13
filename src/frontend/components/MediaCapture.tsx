@@ -50,6 +50,8 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
     null,
   );
   const [isRecording, setIsRecording] = useState(false);
+  const [isStopping, setIsStopping] = useState(false); // Estado para indicar que está deteniendo
+  const [isExiting, setIsExiting] = useState(false); // Estado para indicar que está regresando
   const streamRef = useRef<MediaStream | null>(null);
 
   const [showEventDetails, setShowEventDetails] = useState(false);
@@ -221,21 +223,26 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
     // Función para verificar el estado del proxy y bloqueo periódicamente
     const checkProxyAndBlockStatus = async () => {
       try {
-        // Verificar estado del proxy
-        const isProxyConnected = await window.api.isProxySetup();
-        
-        // Verificar estado de bloqueo del participante
+        // OPTIMIZACIÓN: Una sola petición al backend para verificar todo
+        // verifyEventKey ya valida: evento activo, participante válido, y estado de bloqueo
         let isBlocked = false;
+        let isProxyConnected = false;
+        
         try {
           const verification = await window.api.verifyEventKey(eventKey);
-          // Si la verificación falla o no está permitida, el participante está bloqueado
+          
           if (!verification || !verification.isValid) {
             isBlocked = true;
+            isProxyConnected = false;
+          } else {
+            // Si la verificación es exitosa, el proxy está funcionando
+            isProxyConnected = true;
           }
         } catch (error) {
-          // Si hay error en la verificación, asumir bloqueado
-          console.error('Error verificando estado de bloqueo:', error);
+          // Si hay error en la verificación, asumir problema de conexión
+          console.error('Error verificando estado:', error);
           isBlocked = true;
+          isProxyConnected = false;
         }
         
         // Si el participante fue bloqueado
@@ -296,8 +303,8 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
 
     initializeProxy();
     
-    // Verificar proxy y bloqueo cada 5 segundos
-    proxyCheckIntervalRef.current = setInterval(checkProxyAndBlockStatus, 5000);
+    // Verificar proxy y bloqueo cada 10 segundos (reducido de 5 para menos carga)
+    proxyCheckIntervalRef.current = setInterval(checkProxyAndBlockStatus, 10000);
 
     // IMPORTANTE: Listener para detectar manipulación del proxy
     const handleProxyTampering = (data: { reason: string; timestamp: string }) => {
@@ -514,7 +521,16 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
       return;
     }
 
+    // Prevenir múltiples clicks - si ya está deteniendo, retornar inmediatamente
+    if (isStopping) {
+      console.log('⏸️ Ya está deteniendo, ignorando click adicional');
+      return;
+    }
+
     try {
+      // ✅ MARCAR COMO "DETENIENDO" INMEDIATAMENTE (antes de cualquier operación)
+      setIsStopping(true);
+      
       // Stop creating new logs locally
       window.api.stopCaptureInterval();
 
@@ -534,9 +550,11 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
       await stopLocalTimer();
     } catch (err) {
       console.error('Error stopping capture:', err);
+    } finally {
+      // ✅ SIEMPRE limpiar los estados al final
+      setIsRecording(false);
+      setIsStopping(false);
     }
-
-    setIsRecording(false);
   };
 
   const toggleRecording = async () => {
@@ -915,9 +933,24 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
   };
 
   // Handle activity exit
-  const handleExitActivity = () => {
-    // Llamar directamente a onExit que ahora es simple y rapido
-    onExit();
+  const handleExitActivity = async () => {
+    if (isExiting) {
+      console.log('⏸️ Ya está regresando, ignorando click adicional');
+      return;
+    }
+
+    try {
+      // ✅ Marcar como "regresando" inmediatamente
+      setIsExiting(true);
+      
+      // Llamar a onExit (puede tomar 3-5 segundos)
+      await onExit();
+    } catch (error) {
+      console.error('Error al regresar:', error);
+      // En caso de error, igual volver al estado normal
+      setIsExiting(false);
+    }
+    // No necesitamos finally aquí porque onExit cambia de página
   };
 
   const isTimeExhausted = remainingSeconds !== null && remainingSeconds <= 0;
@@ -929,6 +962,12 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
     eventStatus.status === "No tracking" ||
     isTimeExhausted
   );
+  
+  // Deshabilitar el botón de detener si ya está en proceso de detención
+  const isStopDisabled = isStopping;
+  
+  // Deshabilitar el botón de regresar si está en proceso
+  const isExitDisabled = isExiting || isRecording || isStopping;
 
   return (
     <div className="fixed inset-0 w-screen h-screen flex flex-col bg-gray-800">
@@ -1062,18 +1101,27 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
           <div className="mt-4 flex w-full flex-col gap-2">
             <button
               onClick={toggleRecording}
-              disabled={isStartDisabled}
+              disabled={isStartDisabled || isStopDisabled}
               className={`w-full rounded-md py-2 px-3 text-sm font-semibold transition-all transform flex items-center justify-center gap-2 shadow-lg ${
                 isRecording
-                  ? "bg-red-600 text-white hover:bg-red-700 hover:scale-105"
+                  ? isStopping
+                    ? "bg-orange-600 text-white cursor-wait"
+                    : "bg-red-600 text-white hover:bg-red-700 hover:scale-105"
                   : "bg-blue-600 text-white hover:bg-blue-700 hover:scale-105"
-              } ${isStartDisabled && "cursor-not-allowed opacity-50 hover:scale-100"}`}
+              } ${(isStartDisabled || isStopDisabled) && "cursor-not-allowed opacity-50 hover:scale-100"}`}
             >
               {isRecording ? (
-                <>
-                  <FaTimesCircle size={14} />
-                  Detener monitoreo
-                </>
+                isStopping ? (
+                  <>
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"></div>
+                    Deteniendo...
+                  </>
+                ) : (
+                  <>
+                    <FaTimesCircle size={14} />
+                    Detener monitoreo
+                  </>
+                )
               ) : (
                 <>
                   <FaRegPlayCircle size={14} />
@@ -1083,13 +1131,28 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
             </button>
             <button
               onClick={handleExitActivity}
-              disabled={isRecording}
+              disabled={isExitDisabled}
               className={`w-full rounded-md py-2 px-3 text-sm font-semibold transition-all transform flex items-center justify-center gap-2 shadow-lg
-                ${isRecording ? "bg-gray-500 cursor-not-allowed opacity-50" : "bg-gray-600 text-white hover:bg-gray-700 hover:scale-105"}
+                ${isExiting 
+                  ? "bg-orange-600 text-white cursor-wait" 
+                  : (isRecording || isStopping) 
+                    ? "bg-gray-500 cursor-not-allowed opacity-50" 
+                    : "bg-gray-600 text-white hover:bg-gray-700 hover:scale-105"
+                }
+                ${isExitDisabled && "cursor-not-allowed opacity-50 hover:scale-100"}
                 `}
             >
-              <FaBackspace size={14} />
-              Regresar
+              {isExiting ? (
+                <>
+                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent"></div>
+                  Regresando...
+                </>
+              ) : (
+                <>
+                  <FaBackspace size={14} />
+                  Regresar
+                </>
+              )}
             </button>
           </div>
         </div>

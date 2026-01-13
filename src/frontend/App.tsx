@@ -64,33 +64,61 @@ const App = () => {
     
     setIsExiting(true);
     
-    // Detener monitoreo y proxy de forma completa
     try {
       console.log('🔄 Usuario presiono regresar, limpiando sistema...');
       
-      // Detener monitoreo si está activo
-      await window.api.stopMonitoring().catch(err => {
-        console.warn('⚠️ Error deteniendo monitoreo:', err);
-      });
+      // OPTIMIZACIÓN: Ejecutar limpieza con timeouts para no bloquear UI
+      const cleanupWithTimeout = async () => {
+        // 1. Detener monitoreo (timeout de 2s)
+        try {
+          await Promise.race([
+            window.api.stopMonitoring(),
+            new Promise((resolve) => setTimeout(resolve, 2000))
+          ]);
+          console.log('✅ Monitoreo detenido');
+        } catch (err) {
+          console.warn('⚠️ Timeout deteniendo monitoreo:', err);
+        }
+        
+        // 2. Detener proxy (timeout de 2s)
+        try {
+          await Promise.race([
+            window.api.stopProxy(),
+            new Promise((resolve) => setTimeout(resolve, 2000))
+          ]);
+          console.log('✅ Proxy detenido');
+        } catch (err) {
+          console.warn('⚠️ Timeout deteniendo proxy:', err);
+        }
+        
+        // 3. Limpiar configuración del sistema (timeout de 1s)
+        try {
+          await Promise.race([
+            window.api.unsetProxySettings(),
+            new Promise((resolve) => setTimeout(resolve, 1000))
+          ]);
+          console.log('✅ Configuración limpiada');
+        } catch (err) {
+          console.warn('⚠️ Timeout limpiando configuración:', err);
+        }
+      };
       
-      // Detener proxy (esto también detiene el monitor)
-      await window.api.stopProxy().catch((err: any) => {
-        console.warn('⚠️ Error deteniendo proxy:', err);
-      });
-      
-      // Desactivar proxy del sistema
-      await window.api.unsetProxySettings();
+      // Ejecutar limpieza completa con timeout global de 5s
+      await Promise.race([
+        cleanupWithTimeout(),
+        new Promise((resolve) => setTimeout(resolve, 5000))
+      ]);
       
       console.log('✅ Sistema limpiado correctamente');
     } catch (error) {
       console.error('❌ Error en limpieza:', error);
+    } finally {
+      // SIEMPRE volver al formulario principal
+      setEventKey("");
+      setShowConsent(false);
+      setConsentData(null);
+      setIsExiting(false);
     }
-    
-    // Volver al formulario principal
-    setEventKey("");
-    setShowConsent(false);
-    setConsentData(null);
-    setIsExiting(false);
   };
 
   return (
