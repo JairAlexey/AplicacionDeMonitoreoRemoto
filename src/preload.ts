@@ -58,6 +58,14 @@ const removeProxyTamperingListener = () => {
   ipcRenderer.removeAllListeners('proxy-tampering');
 };
 
+const onMonitoringStopped = (callback: (data: any) => void) => {
+  ipcRenderer.on('monitoring-stopped', (_event, data) => callback(data));
+};
+
+const removeMonitoringStoppedListener = () => {
+  ipcRenderer.removeAllListeners('monitoring-stopped');
+};
+
 contextBridge.exposeInMainWorld("api", {
   ...handlersMappedToIpcRenderer,
   onAppClosing,
@@ -65,4 +73,6 @@ contextBridge.exposeInMainWorld("api", {
   notifyAppClosingComplete,
   onProxyTampering,
   removeProxyTamperingListener,
+  onMonitoringStopped,
+  removeMonitoringStoppedListener,
 });

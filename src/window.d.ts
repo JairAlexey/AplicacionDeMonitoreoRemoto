@@ -3,6 +3,8 @@ interface Window {
   api: {
     onProxyTampering: (callback: (data: any) => void) => void;
     removeProxyTamperingListener: () => void;
+    onMonitoringStopped: (callback: (data: any) => void) => void;
+    removeMonitoringStoppedListener: () => void;
     onAppClosing: (callback: () => void) => void;
     removeAppClosingListener: () => void;
     notifyAppClosingComplete: () => void;

@@ -7,6 +7,7 @@ import { connectionManager } from "./connection-manager";
 let eventKey: string = "";
 let currentProxyPort: number | null = null;
 let isMonitoringActive: boolean = false;
+const MONITORING_STOPPED_CODE = "MONITORING_STOPPED";
 
 // Variables de control para evitar ejecuciones duplicadas
 let isCleaningUp: boolean = false;
@@ -16,6 +17,51 @@ let isUnsettingProxy: boolean = false;
 
 // Helper para obtener el estado de monitoreo
 export const getMonitoringStatus = (): boolean => isMonitoringActive;
+
+const createMonitoringStoppedError = () => {
+  const error = new Error("Monitoring stopped by server");
+  (error as { code?: string }).code = MONITORING_STOPPED_CODE;
+  return error;
+};
+
+const isMonitoringStoppedError = (error: unknown): boolean => {
+  if (!error || typeof error !== "object") return false;
+  return (error as { code?: string }).code === MONITORING_STOPPED_CODE;
+};
+
+const notifyMonitoringStopped = (message: string) => {
+  const windows = BrowserWindow.getAllWindows();
+  if (windows.length === 0) {
+    return;
+  }
+  windows[0].webContents.send("monitoring-stopped", {
+    reason: "monitoring_not_started",
+    message,
+  });
+};
+
+const handleMonitoringNotStarted = (
+  status: number,
+  errorText: string,
+  context: string,
+): boolean => {
+  if (status !== 403) return false;
+
+  const normalized = (errorText || "").toLowerCase();
+  if (!normalized.includes("monitoring not started")) return false;
+
+  if (isMonitoringActive) {
+    console.warn(
+      `[MONITORING] ${context}: server reports monitoring not started. Stopping local capture.`,
+    );
+    isMonitoringActive = false;
+    connectionManager.updateProxyConfig({ isMonitoring: false });
+    stopCaptureInterval();
+    notifyMonitoringStopped("Monitoring stopped by server");
+  }
+
+  return true;
+};
 
 // Función global de cleanup - ejecuta durante el cierre de la app
 export const globalCleanup = async () => {
@@ -636,7 +682,10 @@ const withRetry = async <T>(
         console.warn(`[UPLOAD] ${label} retry ${attempt}/${attempts}`);
       }
       return await fn();
-    } catch (error) {
+  } catch (error) {
+      if (isMonitoringStoppedError(error)) {
+        throw error;
+      }
       lastError = error;
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`[UPLOAD] ${label} failed (${attempt}/${attempts}): ${message}`);
@@ -674,6 +723,15 @@ const requestPresignedUpload = async (
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => "");
+      if (
+        handleMonitoringNotStarted(
+          response.status,
+          errorText,
+          `presign ${endpoint}`,
+        )
+      ) {
+        throw createMonitoringStoppedError();
+      }
       throw new Error(`Presign failed: ${response.status} - ${errorText}`);
     }
 
@@ -735,6 +793,15 @@ const logScreenCapture = async (s3Key: string, monitorName: string) => {
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => "");
+    if (
+      handleMonitoringNotStarted(
+        response.status,
+        errorText,
+        "log screen capture",
+      )
+    ) {
+      throw createMonitoringStoppedError();
+    }
     throw new Error(`Log screenshot failed: ${response.status} - ${errorText}`);
   }
 };
@@ -753,6 +820,15 @@ const logMediaCapture = async (s3Key: string) => {
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => "");
+    if (
+      handleMonitoringNotStarted(
+        response.status,
+        errorText,
+        "log media capture",
+      )
+    ) {
+      throw createMonitoringStoppedError();
+    }
     throw new Error(`Log media failed: ${response.status} - ${errorText}`);
   }
 };
@@ -800,10 +876,12 @@ export const captureDesktop = async () => {
       try {
         presignData = await requestPresignedUpload(EvalTechAPI.screenPresign);
       } catch (error) {
-        console.warn(
-          "[SCREEN] Presign failed, falling back to backend upload:",
-          error,
-        );
+        if (!isMonitoringStoppedError(error)) {
+          console.warn(
+            "[SCREEN] Presign failed, falling back to backend upload:",
+            error,
+          );
+        }
       }
 
       if (presignData) {
@@ -823,7 +901,14 @@ export const captureDesktop = async () => {
       }
 
       if (presignData) {
-        await logScreenCapture(presignData.s3_key, friendlyName);
+        try {
+          await logScreenCapture(presignData.s3_key, friendlyName);
+        } catch (error) {
+          if (isMonitoringStoppedError(error)) {
+            return;
+          }
+          throw error;
+        }
         return;
       }
 
@@ -843,7 +928,19 @@ export const captureDesktop = async () => {
       );
 
       if (!response.ok) {
-        throw new Error(`API error: ${response.statusText}`);
+        const errorText = await response.text().catch(() => "");
+        if (
+          handleMonitoringNotStarted(
+            response.status,
+            errorText,
+            "screen upload",
+          )
+        ) {
+          return;
+        }
+        throw new Error(
+          `API error: ${response.status} - ${errorText || response.statusText}`,
+        );
       }
     }));
     
@@ -940,10 +1037,12 @@ export const uploadMedia = async (data: ArrayBuffer) => {
         media_type: "video",
       });
     } catch (error) {
-      console.warn(
-        "[UPLOAD] Presign failed, falling back to backend upload:",
-        error,
-      );
+      if (!isMonitoringStoppedError(error)) {
+        console.warn(
+          "[UPLOAD] Presign failed, falling back to backend upload:",
+          error,
+        );
+      }
     }
 
     if (presignData) {
@@ -963,7 +1062,14 @@ export const uploadMedia = async (data: ArrayBuffer) => {
     }
 
     if (presignData) {
-      await logMediaCapture(presignData.s3_key);
+      try {
+        await logMediaCapture(presignData.s3_key);
+      } catch (error) {
+        if (isMonitoringStoppedError(error)) {
+          return;
+        }
+        throw error;
+      }
       console.log(
         `[UPLOAD] Video segment uploaded to S3: ${filename} (${(blob.size / 1024).toFixed(2)} KB)`,
       );
@@ -986,6 +1092,15 @@ export const uploadMedia = async (data: ArrayBuffer) => {
 
     if (!response.ok) {
       const errorText = await response.text();
+      if (
+        handleMonitoringNotStarted(
+          response.status,
+          errorText,
+          "media upload",
+        )
+      ) {
+        return;
+      }
       throw new Error(`Upload failed: ${response.status} - ${errorText}`);
     }
 

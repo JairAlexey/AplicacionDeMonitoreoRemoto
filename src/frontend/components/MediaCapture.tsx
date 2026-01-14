@@ -352,15 +352,50 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
       }));
     };
 
+    const handleMonitoringStopped = async (data: { reason?: string; message?: string }) => {
+      console.warn('[MONITORING] Monitoring stopped event received:', data);
+
+      // Detener grabacion inmediatamente si esta activa
+      if (isRecording) {
+        await stopRecording();
+      } else {
+        window.api.stopCaptureInterval();
+      }
+
+      // Detener el timer local
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+        timerIntervalRef.current = null;
+      }
+      isMonitoringActiveRef.current = false;
+
+      // Actualizar estado visual
+      setIsRecording(false);
+      setIsProxyValid(false);
+      setEventStatus(prev => ({
+        ...prev,
+        status: "No tracking"
+      }));
+
+      setToastMessage(data?.message || "Monitoreo detenido por el servidor");
+      setShowToast(true);
+    };
+
     // Registrar el listener usando la API expuesta
     if (window.api?.onProxyTampering) {
       window.api.onProxyTampering(handleProxyTampering);
+    }
+    if (window.api?.onMonitoringStopped) {
+      window.api.onMonitoringStopped(handleMonitoringStopped);
     }
     
     // Cleanup al desmontar - siempre retornar función de cleanup
     return () => {
       if (window.api?.removeProxyTamperingListener) {
         window.api.removeProxyTamperingListener();
+      }
+      if (window.api?.removeMonitoringStoppedListener) {
+        window.api.removeMonitoringStoppedListener();
       }
       
       // Limpiar intervalo de verificación del proxy
