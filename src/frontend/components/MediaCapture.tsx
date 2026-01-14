@@ -53,6 +53,14 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
   const [isStopping, setIsStopping] = useState(false); // Estado para indicar que está deteniendo
   const [isExiting, setIsExiting] = useState(false); // Estado para indicar que está regresando
   const streamRef = useRef<MediaStream | null>(null);
+  const mediaConstraints: MediaStreamConstraints = {
+    video: {
+      width: { ideal: 1280, max: 1280 },
+      height: { ideal: 720, max: 720 },
+      frameRate: { ideal: 30, max: 30 },
+    },
+    audio: true,
+  };
 
   const [showEventDetails, setShowEventDetails] = useState(false);
 
@@ -389,10 +397,7 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
         let testStream: MediaStream | null = null;
         try {
           // Intentar acceder a los dispositivos
-          testStream = await navigator.mediaDevices.getUserMedia({
-            video: true,
-            audio: true,
-          });
+          testStream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
 
           const videoTracks = testStream.getVideoTracks();
           const audioTracks = testStream.getAudioTracks();
@@ -629,10 +634,7 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
         ? "video/webm; codecs=vp9"
         : "video/webm";
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: true,
-        audio: true,
-      });
+      const stream = await navigator.mediaDevices.getUserMedia(mediaConstraints);
 
       streamRef.current = stream;
 
@@ -716,7 +718,13 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
         };
       });
 
-      let currentRecorder = new MediaRecorder(stream, { mimeType });
+      const recorderOptions: MediaRecorderOptions = {
+        mimeType,
+        videoBitsPerSecond: 2500000,
+        audioBitsPerSecond: 128000,
+      };
+
+      let currentRecorder = new MediaRecorder(stream, recorderOptions);
       let uploadCounter = 0;
       let recordingTimer: NodeJS.Timeout | null = null;
       
@@ -759,19 +767,19 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
       // Función para iniciar nueva grabación
       const startNewRecording = () => {
         if (stream.active) {
-          currentRecorder = new MediaRecorder(stream, { mimeType });
+          currentRecorder = new MediaRecorder(stream, recorderOptions);
           currentRecorder.start();
           console.log(`[VIDEO] Nueva grabación iniciada #${uploadCounter + 1}`);
         }
       };
       
-      // Función para manejar el ciclo de grabaciones cada 5 minutos
+      // Funcion para manejar el ciclo de grabaciones cada 3 minutos
       const scheduleNextRecording = () => {
         recordingTimer = setTimeout(async () => {
           await finishCurrentRecording();
           startNewRecording();
           scheduleNextRecording(); // Programar la siguiente
-        }, 5 * 60 * 1000); // 5 minutos
+        }, 3 * 60 * 1000); // 3 minutos
       };
       
       // Manejar finalización del monitoreo
@@ -793,7 +801,7 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
       (currentRecorder as any).startCustomRecording = () => {
         if (stream.active) {
           currentRecorder.start();
-          console.log('[VIDEO] Primera grabación iniciada, ciclo cada 5 minutos');
+          console.log('[VIDEO] Primera grabacion iniciada, ciclo cada 3 minutos');
           scheduleNextRecording();
           setIsRecording(true);
         }
