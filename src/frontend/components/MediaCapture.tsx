@@ -54,6 +54,9 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
   const [isExiting, setIsExiting] = useState(false); // Estado para indicar que está regresando
   const streamRef = useRef<MediaStream | null>(null);
   const isAppClosingRef = useRef(false);
+  const uploadQueueRef = useRef<{ id: number; blob: Blob }[]>([]);
+  const uploadInProgressRef = useRef(false);
+  const uploadWaitersRef = useRef<(() => void)[]>([]);
   const mediaConstraints: MediaStreamConstraints = {
     video: {
       width: { ideal: 1280, max: 1280 },
@@ -751,83 +754,180 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
       };
 
       let currentRecorder = new MediaRecorder(stream, recorderOptions);
-      let uploadCounter = 0;
       let recordingTimer: NodeJS.Timeout | null = null;
-      
-      // Función para finalizar grabación actual y subir video
-      const finishCurrentRecording = async () => {
+      let segmentCounter = 0;
+      let activeSegmentId = 0;
+
+      const resolveUploadWaiters = () => {
+        if (uploadWaitersRef.current.length === 0) {
+          return;
+        }
+        const waiters = uploadWaitersRef.current;
+        uploadWaitersRef.current = [];
+        waiters.forEach((resolve) => resolve());
+      };
+
+      const processUploadQueue = async () => {
+        if (uploadInProgressRef.current) {
+          return;
+        }
+        if (uploadQueueRef.current.length === 0) {
+          return;
+        }
+
+        uploadInProgressRef.current = true;
+        while (uploadQueueRef.current.length > 0) {
+          const item = uploadQueueRef.current.shift();
+          if (!item) {
+            continue;
+          }
+
+          try {
+            const arrayBuffer = await blobToArrayBuffer(item.blob);
+            await window.api.uploadMedia(arrayBuffer);
+            console.log(`[VIDEO] Upload #${item.id} completado exitosamente`);
+          } catch (error) {
+            console.error(`[VIDEO] Error en upload #${item.id}:`, error);
+          }
+        }
+        uploadInProgressRef.current = false;
+        resolveUploadWaiters();
+      };
+
+      const enqueueUpload = (blob: Blob, segmentId: number) => {
+        uploadQueueRef.current.push({ id: segmentId, blob });
+        console.log(
+          `[VIDEO] Video #${segmentId} encolado: ${(blob.size / 1024).toFixed(2)} KB`,
+        );
+        void processUploadQueue();
+      };
+
+      const finalizeRecorder = async (
+        recorder: MediaRecorder | null,
+        segmentId: number,
+      ) => {
         return new Promise<void>((resolve) => {
-          if (!currentRecorder || currentRecorder.state === 'inactive') {
+          if (!recorder || recorder.state === "inactive") {
             resolve();
             return;
           }
-          
-          uploadCounter++;
-          const currentUpload = uploadCounter;
-          console.log(`[VIDEO] Finalizando grabación #${currentUpload}`);
-          
-          // Listener para cuando se complete la grabación
-          const handleDataAvailable = async (e: BlobEvent) => {
-            currentRecorder.removeEventListener('dataavailable', handleDataAvailable);
-            
+
+          const handleDataAvailable = (e: BlobEvent) => {
+            recorder.removeEventListener("dataavailable", handleDataAvailable);
+
             if (e.data.size > 0) {
-              try {
-                console.log(`[VIDEO] Video #${currentUpload} generado: ${(e.data.size / 1024).toFixed(2)} KB`);
-                
-                const arrayBuffer = await blobToArrayBuffer(e.data);
-                await window.api.uploadMedia(arrayBuffer);
-                
-                console.log(`[VIDEO] Upload #${currentUpload} completado exitosamente`);
-              } catch (error) {
-                console.error(`[VIDEO] Error en upload #${currentUpload}:`, error);
-              }
+              console.log(
+                `[VIDEO] Video #${segmentId} generado: ${(e.data.size / 1024).toFixed(2)} KB`,
+              );
+              enqueueUpload(e.data, segmentId);
             }
             resolve();
           };
-          
-          currentRecorder.addEventListener('dataavailable', handleDataAvailable);
-          currentRecorder.stop();
+
+          recorder.addEventListener("dataavailable", handleDataAvailable);
+          recorder.stop();
         });
       };
-      
-      // Función para iniciar nueva grabación
-      const startNewRecording = () => {
-        if (stream.active) {
-          currentRecorder = new MediaRecorder(stream, recorderOptions);
-          currentRecorder.start();
-          console.log(`[VIDEO] Nueva grabación iniciada #${uploadCounter + 1}`);
+
+      const startInitialRecording = () => {
+        if (!stream.active) {
+          return;
         }
+        currentRecorder.start();
+        segmentCounter += 1;
+        activeSegmentId = segmentCounter;
+        console.log(
+          `[VIDEO] Primera grabacion iniciada #${activeSegmentId}, ciclo cada 3 minutos`,
+        );
       };
-      
-      // Funcion para manejar el ciclo de grabaciones cada 3 minutos
+
+      const startNextRecording = () => {
+        if (!stream.active) {
+          return;
+        }
+        currentRecorder = new MediaRecorder(stream, recorderOptions);
+        currentRecorder.start();
+        segmentCounter += 1;
+        activeSegmentId = segmentCounter;
+        console.log(`[VIDEO] Nueva grabacion iniciada #${activeSegmentId}`);
+      };
+
+      const rotateRecording = () => {
+        if (!stream.active) {
+          return;
+        }
+        const recorderToFinalize = currentRecorder;
+        const segmentIdToFinalize = activeSegmentId;
+        startNextRecording();
+        void finalizeRecorder(recorderToFinalize, segmentIdToFinalize);
+      };
+
       const scheduleNextRecording = () => {
-        recordingTimer = setTimeout(async () => {
-          await finishCurrentRecording();
-          startNewRecording();
-          scheduleNextRecording(); // Programar la siguiente
-        }, 3 * 60 * 1000); // 3 minutos
+        recordingTimer = setTimeout(() => {
+          rotateRecording();
+          scheduleNextRecording();
+        }, 3 * 60 * 1000);
       };
-      
-      // Manejar finalización del monitoreo
+
+      const waitForUploadsToDrain = (timeoutMs: number) => {
+        return new Promise<boolean>((resolve) => {
+          if (
+            !uploadInProgressRef.current &&
+            uploadQueueRef.current.length === 0
+          ) {
+            resolve(true);
+            return;
+          }
+
+          let resolved = false;
+          const onDone = () => {
+            if (resolved) {
+              return;
+            }
+            resolved = true;
+            clearTimeout(timeout);
+            resolve(true);
+          };
+
+          uploadWaitersRef.current.push(onDone);
+
+          const timeout = setTimeout(() => {
+            if (resolved) {
+              return;
+            }
+            resolved = true;
+            uploadWaitersRef.current = uploadWaitersRef.current.filter(
+              (waiter) => waiter !== onDone,
+            );
+            resolve(false);
+          }, timeoutMs);
+        });
+      };
+
       const handleMonitoringStop = async () => {
-        console.log('[VIDEO] Deteniendo monitoreo...');
-        
-        // Cancelar timer de grabaciones futuras
+        console.log("[VIDEO] Deteniendo monitoreo...");
+
         if (recordingTimer) {
           clearTimeout(recordingTimer);
           recordingTimer = null;
         }
-        
-        // Finalizar grabación actual
-        await finishCurrentRecording();
-        console.log('[VIDEO] Monitoreo detenido completamente');
+
+        await finalizeRecorder(currentRecorder, activeSegmentId);
+
+        const drained = await waitForUploadsToDrain(180000);
+        if (!drained) {
+          console.warn(
+            "[VIDEO] Timeout esperando uploads pendientes, continuando cierre",
+          );
+        }
+
+        console.log("[VIDEO] Monitoreo detenido completamente");
       };
-      
+
       // Función para iniciar el ciclo de grabación (se llamará desde toggleRecording)
       (currentRecorder as any).startCustomRecording = () => {
         if (stream.active) {
-          currentRecorder.start();
-          console.log('[VIDEO] Primera grabacion iniciada, ciclo cada 3 minutos');
+          startInitialRecording();
           scheduleNextRecording();
           setIsRecording(true);
         }

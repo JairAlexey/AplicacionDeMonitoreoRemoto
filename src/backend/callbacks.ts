@@ -582,6 +582,72 @@ type PresignedUploadResponse = {
   headers: Record<string, string>;
 };
 
+const PRESIGN_TIMEOUT_MS = 10000;
+const PRESIGN_LOG_INTERVAL_MS = 5000;
+const PRESIGN_MAX_ATTEMPTS = 2;
+const UPLOAD_LOG_INTERVAL_MS = 10000;
+const UPLOAD_MAX_ATTEMPTS = 2;
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const fetchWithTimeout = async (
+  url: string,
+  options: RequestInit,
+  timeoutMs: number,
+  logIntervalMs: number | null,
+  logLabel: string,
+) => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  let logTimer: NodeJS.Timeout | null = null;
+  let elapsedMs = 0;
+
+  if (logIntervalMs && logIntervalMs > 0) {
+    logTimer = setInterval(() => {
+      elapsedMs += logIntervalMs;
+      console.log(`[UPLOAD] ${logLabel} (${Math.round(elapsedMs / 1000)}s)`);
+    }, logIntervalMs);
+  }
+
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`${logLabel} timeout after ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+    if (logTimer) {
+      clearInterval(logTimer);
+    }
+  }
+};
+
+const withRetry = async <T>(
+  label: string,
+  attempts: number,
+  fn: () => Promise<T>,
+): Promise<T> => {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      if (attempt > 1) {
+        console.warn(`[UPLOAD] ${label} retry ${attempt}/${attempts}`);
+      }
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(`[UPLOAD] ${label} failed (${attempt}/${attempts}): ${message}`);
+      if (attempt < attempts) {
+        await sleep(1000 * attempt);
+      }
+    }
+  }
+  throw lastError;
+};
+
 const requestPresignedUpload = async (
   endpoint: string,
   payload: Record<string, unknown> = {},
@@ -590,30 +656,38 @@ const requestPresignedUpload = async (
     throw new Error("No event key");
   }
 
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${eventKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
+  return withRetry("Presign", PRESIGN_MAX_ATTEMPTS, async () => {
+    const response = await fetchWithTimeout(
+      `${API_BASE_URL}${endpoint}`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${eventKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      },
+      PRESIGN_TIMEOUT_MS,
+      PRESIGN_LOG_INTERVAL_MS,
+      "Esperando presign",
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "");
+      throw new Error(`Presign failed: ${response.status} - ${errorText}`);
+    }
+
+    const data = (await response.json()) as Partial<PresignedUploadResponse>;
+    if (!data.upload_url || !data.s3_key || !data.headers) {
+      throw new Error("Presign response missing required fields");
+    }
+
+    return {
+      upload_url: data.upload_url,
+      s3_key: data.s3_key,
+      headers: data.headers as Record<string, string>,
+    };
   });
-
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => "");
-    throw new Error(`Presign failed: ${response.status} - ${errorText}`);
-  }
-
-  const data = (await response.json()) as Partial<PresignedUploadResponse>;
-  if (!data.upload_url || !data.s3_key || !data.headers) {
-    throw new Error("Presign response missing required fields");
-  }
-
-  return {
-    upload_url: data.upload_url,
-    s3_key: data.s3_key,
-    headers: data.headers as Record<string, string>,
-  };
 };
 
 const uploadWithPresignedUrl = async (
@@ -621,16 +695,29 @@ const uploadWithPresignedUrl = async (
   blob: Blob,
   headers: Record<string, string>,
 ) => {
-  const response = await fetch(uploadUrl, {
-    method: "PUT",
-    headers,
-    body: blob,
-  });
+  const uploadTimeoutMs = Math.max(
+    30000,
+    Math.min(120000, Math.round((blob.size / (1024 * 1024)) * 1000)),
+  );
 
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => "");
-    throw new Error(`S3 upload failed: ${response.status} - ${errorText}`);
-  }
+  await withRetry("S3 upload", UPLOAD_MAX_ATTEMPTS, async () => {
+    const response = await fetchWithTimeout(
+      uploadUrl,
+      {
+        method: "PUT",
+        headers,
+        body: blob,
+      },
+      uploadTimeoutMs,
+      UPLOAD_LOG_INTERVAL_MS,
+      "Subiendo a S3",
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => "");
+      throw new Error(`S3 upload failed: ${response.status} - ${errorText}`);
+    }
+  });
 };
 
 const logScreenCapture = async (s3Key: string, monitorName: string) => {
