@@ -42,6 +42,14 @@ const onAppClosing = (callback: () => void) => {
   ipcRenderer.on('app-closing', callback);
 };
 
+const removeAppClosingListener = () => {
+  ipcRenderer.removeAllListeners('app-closing');
+};
+
+const notifyAppClosingComplete = () => {
+  ipcRenderer.send('app-closing-complete');
+};
+
 const onProxyTampering = (callback: (data: any) => void) => {
   ipcRenderer.on('proxy-tampering', (_event, data) => callback(data));
 };
@@ -53,6 +61,8 @@ const removeProxyTamperingListener = () => {
 contextBridge.exposeInMainWorld("api", {
   ...handlersMappedToIpcRenderer,
   onAppClosing,
+  removeAppClosingListener,
+  notifyAppClosingComplete,
   onProxyTampering,
   removeProxyTamperingListener,
 });

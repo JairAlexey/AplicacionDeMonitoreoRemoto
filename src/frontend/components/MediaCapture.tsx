@@ -53,6 +53,7 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
   const [isStopping, setIsStopping] = useState(false); // Estado para indicar que está deteniendo
   const [isExiting, setIsExiting] = useState(false); // Estado para indicar que está regresando
   const streamRef = useRef<MediaStream | null>(null);
+  const isAppClosingRef = useRef(false);
   const mediaConstraints: MediaStreamConstraints = {
     video: {
       width: { ideal: 1280, max: 1280 },
@@ -366,6 +367,31 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
       }
     };
   }, [eventKey, isRecording, isProxyValid]);
+
+  useEffect(() => {
+    if (!window.api?.onAppClosing) return;
+
+    const handleAppClosing = async () => {
+      if (isAppClosingRef.current) return;
+      isAppClosingRef.current = true;
+
+      try {
+        if (isRecording || isMonitoringActiveRef.current) {
+          await stopRecording();
+        }
+      } catch (error) {
+        console.error("Error during app closing cleanup:", error);
+      } finally {
+        window.api?.notifyAppClosingComplete?.();
+      }
+    };
+
+    window.api.onAppClosing(handleAppClosing);
+
+    return () => {
+      window.api?.removeAppClosingListener?.();
+    };
+  }, [isRecording, mediaRecorder]);
 
 
 
