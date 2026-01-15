@@ -2,12 +2,12 @@ const fs = require("fs");
 const path = require("path");
 
 const BASE_URL = process.env.BASE_URL || "http://127.0.0.1:8000";
-const CONCURRENCY = Number.parseInt(process.env.CONCURRENCY || "20", 10);
-const DURATION_SEC = Number.parseInt(process.env.DURATION_SEC || "60", 10);
+const CONCURRENCY = Number.parseInt(process.env.CONCURRENCY || "50", 10);
+const DURATION_SEC = Number.parseInt(process.env.DURATION_SEC || "10", 10);
 const SCREEN_INTERVAL_MS = Number.parseInt(process.env.SCREEN_INTERVAL_MS || "10000", 10);
-const MEDIA_INTERVAL_MS = Number.parseInt(process.env.MEDIA_INTERVAL_MS || "15000", 10);
+const MEDIA_INTERVAL_MS = Number.parseInt(process.env.MEDIA_INTERVAL_MS || "10000", 10);
 const START_INDEX = Number.parseInt(process.env.START_INDEX || "0", 10);
-const KEYS_COUNT = Number.parseInt(process.env.KEYS_COUNT || "0", 10);
+const KEYS_COUNT = Number.parseInt(process.env.KEYS_COUNT || "50", 10);
 
 const EVENT_KEYS_FILE =
   process.env.EVENT_KEYS_FILE || path.join(__dirname, "event_keys.json");
