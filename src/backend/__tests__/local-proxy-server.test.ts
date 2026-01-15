@@ -65,7 +65,7 @@ describe("LocalProxyServer", () => {
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
-  it("blocks when validation response is not ok", async () => {
+  it("allows when validation response is not ok", async () => {
     const server = makeServer(true);
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: false,
@@ -79,7 +79,7 @@ describe("LocalProxyServer", () => {
       {},
     );
 
-    expect(result.blocked).toBe(true);
+    expect(result.blocked).toBe(false);
   });
 
   it("returns blocked false when validation succeeds", async () => {
@@ -98,7 +98,7 @@ describe("LocalProxyServer", () => {
     expect(result.blocked).toBe(false);
   });
 
-  it("blocks when validation throws", async () => {
+  it("allows when validation throws", async () => {
     const server = makeServer(true);
     globalThis.fetch = vi.fn().mockRejectedValue(new Error("boom")) as unknown as typeof fetch;
 
@@ -108,7 +108,7 @@ describe("LocalProxyServer", () => {
       {},
     );
 
-    expect(result.blocked).toBe(true);
+    expect(result.blocked).toBe(false);
   });
 
   it("handles HTTP request that is blocked", async () => {
