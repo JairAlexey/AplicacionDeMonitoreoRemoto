@@ -971,10 +971,6 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
       // Guardar referencia para cleanup con función personalizada
       (currentRecorder as any).stopAndUpload = handleMonitoringStop;
       setMediaRecorder(currentRecorder);
-      
-      // Como ya tenemos el stream activo, marcamos como disponible
-      setHasCameraAccess(true);
-      setHasMicrophoneAccess(true);
       console.log("MediaCapture initialized, ready to start recording");
     } catch (error: any) {
       console.error("Error accessing devices:", error);
@@ -1139,7 +1135,8 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
     !hasScreenAccess || 
     !isProxyValid || 
     eventStatus.status === "No tracking" ||
-    isTimeExhausted
+    isTimeExhausted ||
+    isExiting
   );
   
   // Deshabilitar el botón de detener si ya está en proceso de detención
