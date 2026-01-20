@@ -837,9 +837,46 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
         void processUploadQueue();
       };
 
+      const attachRecorderHandlers = (recorder: MediaRecorder) => {
+        if ((recorder as any).__hasDataHandler) {
+          return;
+        }
+
+        (recorder as any).__hasDataHandler = true;
+
+        const handleDataAvailable = (e: BlobEvent) => {
+          const segmentId = (recorder as any).__segmentId;
+          if (e.data.size > 0 && typeof segmentId === "number") {
+            console.log(
+              `[VIDEO] Video #${segmentId} generado: ${(e.data.size / 1024).toFixed(2)} KB`,
+            );
+            enqueueUpload(e.data, segmentId);
+          }
+
+          const resolveFinalize = (recorder as any).__resolveFinalize as
+            | undefined
+            | (() => void);
+          if (resolveFinalize) {
+            (recorder as any).__resolveFinalize = null;
+            resolveFinalize();
+          }
+        };
+
+        recorder.addEventListener("dataavailable", handleDataAvailable);
+        (recorder as any).__dataHandler = handleDataAvailable;
+      };
+
+      const setRecorderSegmentId = (
+        recorder: MediaRecorder,
+        segmentId: number,
+      ) => {
+        (recorder as any).__segmentId = segmentId;
+      };
+
+      attachRecorderHandlers(currentRecorder);
+
       const finalizeRecorder = async (
         recorder: MediaRecorder | null,
-        segmentId: number,
       ) => {
         return new Promise<void>((resolve) => {
           if (!recorder || recorder.state === "inactive") {
@@ -847,19 +884,9 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
             return;
           }
 
-          const handleDataAvailable = (e: BlobEvent) => {
-            recorder.removeEventListener("dataavailable", handleDataAvailable);
-
-            if (e.data.size > 0) {
-              console.log(
-                `[VIDEO] Video #${segmentId} generado: ${(e.data.size / 1024).toFixed(2)} KB`,
-              );
-              enqueueUpload(e.data, segmentId);
-            }
+          (recorder as any).__resolveFinalize = () => {
             resolve();
           };
-
-          recorder.addEventListener("dataavailable", handleDataAvailable);
           recorder.stop();
         });
       };
@@ -868,9 +895,10 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
         if (!stream.active) {
           return;
         }
-        currentRecorder.start();
         segmentCounter += 1;
         activeSegmentId = segmentCounter;
+        setRecorderSegmentId(currentRecorder, activeSegmentId);
+        currentRecorder.start();
         console.log(
           `[VIDEO] Primera grabacion iniciada #${activeSegmentId}, ciclo cada 3 minutos`,
         );
@@ -881,9 +909,11 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
           return;
         }
         currentRecorder = new MediaRecorder(stream, recorderOptions);
-        currentRecorder.start();
+        attachRecorderHandlers(currentRecorder);
         segmentCounter += 1;
         activeSegmentId = segmentCounter;
+        setRecorderSegmentId(currentRecorder, activeSegmentId);
+        currentRecorder.start();
         console.log(`[VIDEO] Nueva grabacion iniciada #${activeSegmentId}`);
       };
 
@@ -892,9 +922,8 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
           return;
         }
         const recorderToFinalize = currentRecorder;
-        const segmentIdToFinalize = activeSegmentId;
         startNextRecording();
-        void finalizeRecorder(recorderToFinalize, segmentIdToFinalize);
+        void finalizeRecorder(recorderToFinalize);
       };
 
       const scheduleNextRecording = () => {
@@ -947,7 +976,7 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
           recordingTimer = null;
         }
 
-        await finalizeRecorder(currentRecorder, activeSegmentId);
+        await finalizeRecorder(currentRecorder);
 
         const drained = await waitForUploadsToDrain(180000);
         if (!drained) {
