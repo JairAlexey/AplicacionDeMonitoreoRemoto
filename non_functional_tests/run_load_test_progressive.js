@@ -1,7 +1,20 @@
 const fs = require("fs");
 const path = require("path");
 
-const BASE_URL = process.env.BASE_URL || "http://127.0.0.1:8000";
+const args = process.argv.slice(2);
+const readArg = (name) => {
+  const direct = args.find((arg) => arg.startsWith(`${name}=`));
+  if (direct) {
+    return direct.slice(name.length + 1);
+  }
+  const idx = args.indexOf(name);
+  if (idx !== -1 && idx + 1 < args.length) {
+    return args[idx + 1];
+  }
+  return null;
+};
+
+const BASE_URL = readArg("--base-url") || process.env.BASE_URL || "http://127.0.0.1:8000";
 const MAX_USERS = Number.parseInt(process.env.MAX_USERS || "50", 10);
 const STEP_USERS = Number.parseInt(process.env.STEP_USERS || "1", 10);
 const STEP_DURATION_SEC = Number.parseInt(process.env.STEP_DURATION_SEC || "10", 10);
