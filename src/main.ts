@@ -13,6 +13,51 @@ import squirrelStartup from "electron-squirrel-startup";
 
 config();
 
+let mainWindow: BrowserWindow | null = null;
+let shutdownInProgress = false;
+const APP_CLOSING_TIMEOUT_MS = 15000;
+
+const requestRendererStopRecording = async () => {
+  const windowRef = mainWindow ?? BrowserWindow.getAllWindows()[0];
+  if (!windowRef || windowRef.isDestroyed()) {
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    let resolved = false;
+    const timeoutId = setTimeout(() => {
+      if (resolved) return;
+      resolved = true;
+      resolve();
+    }, APP_CLOSING_TIMEOUT_MS);
+
+    ipcMain.once("app-closing-complete", () => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timeoutId);
+      resolve();
+    });
+
+    windowRef.webContents.send("app-closing");
+  });
+};
+
+const runShutdown = async (shouldExit: boolean) => {
+  if (shutdownInProgress) {
+    return;
+  }
+
+  shutdownInProgress = true;
+
+  await requestRendererStopRecording();
+  await globalCleanup();
+
+  if (shouldExit) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    app.exit(0);
+  }
+};
+
 // Si Squirrel está manejando eventos de instalación, salir inmediatamente
 if (squirrelStartup) {
   app.quit();
@@ -28,7 +73,7 @@ const createWindow = () => {
   const winHeight = 390;
   const margin = 5;
 
-  const mainWindow = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: winWidth,
     height: winHeight,
     resizable: true, // Permite cambiar tamaño
@@ -51,27 +96,27 @@ const createWindow = () => {
 
   // and load the index.html of the app.
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
-    mainWindow.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
+    mainWindow!.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
   } else {
-    mainWindow.loadFile(
+    mainWindow!.loadFile(
       path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`),
     );
   }
   
   // Mostrar ventana solo cuando React notifique que está listo
   ipcMain.handle('appReady', () => {
-    if (!mainWindow.isDestroyed()) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
       // Pequeño delay para asegurar que el render está completo
       setTimeout(() => {
-        mainWindow.show();
-        mainWindow.focus();
+        mainWindow?.show();
+        mainWindow?.focus();
       }, 100);
     }
   });
   
   // Quitar la barra de menú
-  mainWindow.setMenuBarVisibility(false);
-  mainWindow.removeMenu();
+  mainWindow!.setMenuBarVisibility(false);
+  mainWindow!.removeMenu();
   // mainWindow.webContents.openDevTools({
   //   activate: false,
   //   mode: "detach",
@@ -79,18 +124,17 @@ const createWindow = () => {
 
   // Manejar el cierre de ventana
   let isClosing = false;
-  mainWindow.on('close', async (e) => {
-    if (!isClosing && !mainWindow.isDestroyed()) {
+  mainWindow!.on('close', async (e) => {
+    if (!isClosing && mainWindow && !mainWindow.isDestroyed()) {
       e.preventDefault();
       isClosing = true;
       
       console.log('[MAIN] Ventana cerrando - ejecutando cleanup');
       
-      // Ejecutar cleanup inmediatamente
-      await globalCleanup();
+      await runShutdown(false);
       
       // Cerrar la ventana
-      if (!mainWindow.isDestroyed()) {
+      if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.destroy();
       }
     }
@@ -121,15 +165,14 @@ app.whenReady().then(() => {
 
 // Evento before-quit como respaldo (por si close no se ejecuta)
 app.on('before-quit', async (e) => {
+  if (shutdownInProgress) {
+    return;
+  }
+
   e.preventDefault();
   console.log('[MAIN] before-quit - ejecutando cleanup');
   
-  await globalCleanup();
-  
-  // Pequeña espera para requests HTTP
-  await new Promise(resolve => setTimeout(resolve, 500));
-  
-  app.exit(0);
+  await runShutdown(true);
 });
 
 app.on("window-all-closed", () => {
@@ -142,6 +185,24 @@ app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) {
     createWindow();
   }
+});
+
+process.on("SIGINT", async () => {
+  await runShutdown(true);
+});
+
+process.on("SIGTERM", async () => {
+  await runShutdown(true);
+});
+
+process.on("uncaughtException", async (error) => {
+  console.error("[MAIN] uncaughtException:", error);
+  await runShutdown(true);
+});
+
+process.on("unhandledRejection", async (error) => {
+  console.error("[MAIN] unhandledRejection:", error);
+  await runShutdown(true);
 });
 
 // Registrar callbacks IPC

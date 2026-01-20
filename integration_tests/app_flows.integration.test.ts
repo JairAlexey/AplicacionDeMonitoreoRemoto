@@ -66,6 +66,7 @@ const childProcessMock = {
 const electronMock = {
   nativeImage: {
     createFromDataURL: vi.fn(() => ({
+      toJPEG: (_quality: number) => Buffer.from("image"),
       toPNG: () => Buffer.from("image"),
     })),
   },
@@ -148,7 +149,25 @@ describe("app integration flows", () => {
       },
       [`POST ${API_BASE_URL}/proxy/auth-http/`]: { ok: true },
       [`POST ${API_BASE_URL}/proxy/start-monitoring/`]: { ok: true },
+      [`POST ${API_BASE_URL}/events/api/logging/screen/presign`]: {
+        ok: true,
+        jsonData: {
+          upload_url: "https://s3.example.com/screen-upload",
+          s3_key: "media/participant_events/1/screen.jpg",
+          headers: {},
+        },
+      },
+      ["PUT https://s3.example.com/screen-upload"]: { ok: true },
       [`POST ${API_BASE_URL}/events/api/logging/screen/capture`]: { ok: true },
+      [`POST ${API_BASE_URL}/events/api/logging/media/presign`]: {
+        ok: true,
+        jsonData: {
+          upload_url: "https://s3.example.com/media-upload",
+          s3_key: "media/participant_events/1/video.webm",
+          headers: {},
+        },
+      },
+      ["PUT https://s3.example.com/media-upload"]: { ok: true },
       [`POST ${API_BASE_URL}/events/api/logging/media/capture`]: { ok: true },
       [`POST ${API_BASE_URL}/proxy/stop-monitoring/`]: { ok: true },
       [`POST ${API_BASE_URL}/proxy/disconnect-http/`]: { ok: true },

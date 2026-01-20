@@ -161,6 +161,12 @@ const ConsentForm: React.FC<ConsentFormProps> = ({
                 </p>
 
                 <p className="text-[10px] text-gray-300 leading-relaxed">
+                  <strong>Período de retención:</strong> Sus datos personales serán conservados durante un máximo de 
+                  <strong> 6 meses</strong> a partir de la finalización de la evaluación. Posterior a este período, 
+                  los datos serán eliminados de forma permanente de nuestros sistemas.
+                </p>
+
+                <p className="text-[10px] text-gray-300 leading-relaxed">
                   Al aceptar este consentimiento, usted autoriza expresamente el tratamiento de sus datos personales
                   para los fines descritos anteriormente. Este consentimiento es revocable en cualquier momento,
                   aunque la revocación no afectará el tratamiento realizado previamente con su consentimiento.
