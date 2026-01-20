@@ -19,6 +19,10 @@ export class LocalProxyServer extends EventEmitter {
   // Caché de validación de URLs para reducir peticiones al backend
   private validationCache: Map<string, { blocked: boolean; reason?: string; timestamp: number }> = new Map();
   private readonly CACHE_TTL = 60000; // 60 segundos de caché
+  private blocklistVersion: number | null = null;
+  private blocklistPollTimer: NodeJS.Timeout | null = null;
+  private isCheckingBlocklist: boolean = false;
+  private readonly BLOCKLIST_POLL_INTERVAL_MS = 15000;
  
   constructor(config: ProxyConfig) {
     super();
@@ -55,6 +59,7 @@ export class LocalProxyServer extends EventEmitter {
  
       this.server.listen(this.localPort, 'localhost', () => {
         this.isRunning = true;
+        this.updateBlocklistPolling();
         console.log(`Proxy local iniciado en localhost:${this.localPort}`);
         this.emit('started', this.localPort);
         resolve(this.localPort);
@@ -203,6 +208,75 @@ export class LocalProxyServer extends EventEmitter {
     }
   }
  
+  private updateBlocklistPolling(): void {
+    if (this.isRunning && this.config.isMonitoring) {
+      if (!this.blocklistPollTimer) {
+        void this.refreshBlocklistVersion();
+        this.blocklistPollTimer = setInterval(() => {
+          void this.refreshBlocklistVersion();
+        }, this.BLOCKLIST_POLL_INTERVAL_MS);
+      }
+      return;
+    }
+
+    this.stopBlocklistPolling();
+  }
+
+  private stopBlocklistPolling(): void {
+    if (this.blocklistPollTimer) {
+      clearInterval(this.blocklistPollTimer);
+      this.blocklistPollTimer = null;
+    }
+  }
+
+  private async refreshBlocklistVersion(): Promise<void> {
+    if (this.isCheckingBlocklist || !this.config.isMonitoring) {
+      return;
+    }
+
+    this.isCheckingBlocklist = true;
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+      const response = await fetch(`${this.config.apiBaseUrl}/proxy/blocklist-version/`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${this.config.eventKey}`,
+          'X-Proxy-Signature': 'LocalProxyServer-v1',
+        },
+        signal: controller.signal
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        return;
+      }
+
+      const data = await response.json();
+      const version = Number(data && data.version);
+
+      if (!Number.isFinite(version)) {
+        return;
+      }
+
+      if (this.blocklistVersion !== null && version !== this.blocklistVersion) {
+        this.validationCache.clear();
+      }
+
+      this.blocklistVersion = version;
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        console.warn('Timeout consultando version de bloqueo');
+      } else {
+        console.error('Error consultando version de bloqueo:', error);
+      }
+    } finally {
+      this.isCheckingBlocklist = false;
+    }
+  }
+
   /**
    * Hace la petición real al sitio web
    */
@@ -376,10 +450,17 @@ export class LocalProxyServer extends EventEmitter {
   async stop(): Promise<void> {
     return new Promise((resolve) => {
       if (!this.server || !this.isRunning) {
+        this.stopBlocklistPolling();
+        this.blocklistVersion = null;
+        this.validationCache.clear();
         resolve();
         return;
       }
  
+      this.stopBlocklistPolling();
+      this.blocklistVersion = null;
+      this.validationCache.clear();
+
       // Timeout para evitar colgado infinito
       const timeout = setTimeout(() => {
         console.warn('⚠️ Timeout deteniendo servidor, forzando cierre...');
@@ -417,6 +498,14 @@ export class LocalProxyServer extends EventEmitter {
    * Actualiza la configuración
    */
   updateConfig(config: Partial<ProxyConfig>): void {
+    const wasMonitoring = this.config.isMonitoring;
     this.config = { ...this.config, ...config };
+
+    if (!wasMonitoring && this.config.isMonitoring) {
+      this.validationCache.clear();
+      this.blocklistVersion = null;
+    }
+
+    this.updateBlocklistPolling();
   }
 }
