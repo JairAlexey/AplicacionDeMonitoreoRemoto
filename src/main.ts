@@ -18,6 +18,10 @@ let shutdownInProgress = false;
 const APP_CLOSING_TIMEOUT_MS = 15000;
 
 const requestRendererStopRecording = async () => {
+  if (!callbacks.getMonitoringStatus()) {
+    return;
+  }
+
   const windowRef = mainWindow ?? BrowserWindow.getAllWindows()[0];
   if (!windowRef || windowRef.isDestroyed()) {
     return;
@@ -125,18 +129,23 @@ const createWindow = () => {
   // Manejar el cierre de ventana
   let isClosing = false;
   mainWindow!.on('close', async (e) => {
-    if (!isClosing && mainWindow && !mainWindow.isDestroyed()) {
-      e.preventDefault();
-      isClosing = true;
-      
-      console.log('[MAIN] Ventana cerrando - ejecutando cleanup');
-      
-      await runShutdown(false);
-      
-      // Cerrar la ventana
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.destroy();
-      }
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      return;
+    }
+    e.preventDefault();
+    if (isClosing) {
+      return;
+    }
+
+    isClosing = true;
+
+    console.log('[MAIN] Ventana cerrando - ejecutando cleanup');
+
+    await runShutdown(false);
+
+    // Cerrar la ventana
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.destroy();
     }
   });
 };

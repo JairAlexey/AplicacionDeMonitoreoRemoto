@@ -300,14 +300,22 @@ export const globalCleanup = async () => {
       console.log("[CLEANUP] Deteniendo proxy");
       await stopProxy();
     }
-    
+
     // CRÍTICO: Desactivar proxy del sistema como medida de seguridad
-    console.log("[CLEANUP] Desactivando proxy del sistema");
+    console.log("[CLEANUP] Desactivando proxy del sistema (UNSET)");
+    const unsetSuccess = await unsetProxySettings();
+    if (unsetSuccess) {
+      console.log("[CLEANUP] Proxy del sistema desactivado correctamente (UNSET)");
+    } else {
+      console.warn("[CLEANUP] Fallo desactivacion del proxy del sistema (UNSET)");
+    }
+
+    console.log("[CLEANUP] Desactivando proxy del sistema (fallback)");
     const success = await disableSystemProxy();
     if (success) {
-      console.log("[CLEANUP] Proxy del sistema desactivado correctamente");
+      console.log("[CLEANUP] Proxy del sistema desactivado correctamente (fallback)");
     } else {
-      console.warn("[CLEANUP] Fallo desactivacion del proxy del sistema");
+      console.warn("[CLEANUP] Fallo desactivacion del proxy del sistema (fallback)");
     }
     
     console.log("[CLEANUP] Completado exitosamente");
