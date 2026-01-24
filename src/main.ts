@@ -142,6 +142,7 @@ const createWindow = () => {
 };
 app.on("ready", () => {
   createWindow();
+  void callbacks.initMediaQueue();
   session.defaultSession.setDisplayMediaRequestHandler(
     (_request, callback) => {
       desktopCapturer

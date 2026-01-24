@@ -13,6 +13,7 @@ const MONITORING_STOPPED_CODE = "MONITORING_STOPPED";
 
 type MediaQueueItem = {
   filePath: string;
+  eventKey: string;
   size: number;
   createdAt: number;
   attempts: number;
@@ -30,6 +31,7 @@ let mediaQueueRetryTimer: NodeJS.Timeout | null = null;
 let mediaQueueCurrentPath: string | null = null;
 
 const getMediaQueueDir = () => path.join(app.getPath("userData"), MEDIA_QUEUE_DIR_NAME);
+const getMetadataPath = (filePath: string) => `${filePath}.json`;
 
 const sortMediaQueue = () => {
   mediaQueue.sort((a, b) => a.createdAt - b.createdAt);
@@ -44,6 +46,10 @@ const safeUnlink = async (filePath: string) => {
       console.warn(`[UPLOAD] Error deleting file ${filePath}:`, error);
     }
   }
+};
+
+const safeUnlinkMetadata = async (filePath: string) => {
+  await safeUnlink(getMetadataPath(filePath));
 };
 
 const enqueueExistingMediaFiles = async () => {
@@ -67,8 +73,27 @@ const enqueueExistingMediaFiles = async () => {
         if (!stat.isFile()) {
           continue;
         }
+        let queuedEventKey = "";
+        try {
+          const metadataRaw = await fs.readFile(getMetadataPath(filePath), "utf8");
+          const metadata = JSON.parse(metadataRaw);
+          if (metadata && typeof metadata.eventKey === "string") {
+            queuedEventKey = metadata.eventKey;
+          }
+        } catch (error) {
+          // metadata optional for backward compatibility
+        }
+        if (!queuedEventKey) {
+          console.warn(
+            `[UPLOAD] Missing event key for queued file ${path.basename(filePath)}; deleting`,
+          );
+          await safeUnlink(filePath);
+          await safeUnlinkMetadata(filePath);
+          continue;
+        }
         items.push({
           filePath,
+          eventKey: queuedEventKey,
           size: stat.size,
           createdAt: stat.mtimeMs,
           attempts: 0,
@@ -116,6 +141,7 @@ const enforceMediaQueueLimit = async () => {
       `[UPLOAD] Queue over ${MEDIA_QUEUE_MAX_BYTES} bytes. Removing oldest segment ${path.basename(item.filePath)}`,
     );
     await safeUnlink(item.filePath);
+    await safeUnlinkMetadata(item.filePath);
     totalBytes -= item.size;
     mediaQueue.splice(index, 1);
   }
@@ -143,15 +169,14 @@ const dropAllQueuedMedia = async (reason: string) => {
   mediaQueue = [];
   for (const item of items) {
     await safeUnlink(item.filePath);
+    await safeUnlinkMetadata(item.filePath);
   }
 };
 
 const ensureMediaQueueReady = async () => {
   await enqueueExistingMediaFiles();
   await enforceMediaQueueLimit();
-  if (eventKey) {
-    void processMediaQueue();
-  }
+  void processMediaQueue();
 };
 
 const generateMediaFilename = () => {
@@ -163,13 +188,23 @@ const generateMediaFilename = () => {
 async function enqueueMediaSegment(buffer: Buffer) {
   await ensureMediaQueueReady();
 
+  if (!eventKey) {
+    throw new Error("No event key");
+  }
+
   const filename = generateMediaFilename();
   const filePath = path.join(getMediaQueueDir(), filename);
 
   await fs.writeFile(filePath, buffer);
+  await fs.writeFile(
+    getMetadataPath(filePath),
+    JSON.stringify({ eventKey, createdAt: Date.now(), size: buffer.length }),
+    "utf8",
+  );
 
   const item: MediaQueueItem = {
     filePath,
+    eventKey,
     size: buffer.length,
     createdAt: Date.now(),
     attempts: 0,
@@ -181,6 +216,10 @@ async function enqueueMediaSegment(buffer: Buffer) {
   await enforceMediaQueueLimit();
   void processMediaQueue();
 }
+
+export const initMediaQueue = async () => {
+  await ensureMediaQueueReady();
+};
 
 // Variables de control para evitar ejecuciones duplicadas
 let isCleaningUp: boolean = false;
@@ -874,8 +913,10 @@ const withRetry = async <T>(
 const requestPresignedUpload = async (
   endpoint: string,
   payload: Record<string, unknown> = {},
+  overrideEventKey?: string,
 ): Promise<PresignedUploadResponse> => {
-  if (!eventKey) {
+  const authEventKey = overrideEventKey || eventKey;
+  if (!authEventKey) {
     throw new Error("No event key");
   }
 
@@ -885,7 +926,7 @@ const requestPresignedUpload = async (
       {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${eventKey}`,
+          Authorization: `Bearer ${authEventKey}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(payload),
@@ -980,11 +1021,15 @@ const logScreenCapture = async (s3Key: string, monitorName: string) => {
   }
 };
 
-const logMediaCapture = async (s3Key: string) => {
+const logMediaCapture = async (s3Key: string, overrideEventKey?: string) => {
+  const authEventKey = overrideEventKey || eventKey;
+  if (!authEventKey) {
+    throw new Error("No event key");
+  }
   const response = await fetch(`${API_BASE_URL}${EvalTechAPI.mediaCapture}`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${eventKey}`,
+      Authorization: `Bearer ${authEventKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -1192,8 +1237,8 @@ export const stopCaptureInterval = () => {
   ScreenCaptureManager.getInstance().stopCapture();
 };
 
-async function uploadQueuedMediaFile(filePath: string) {
-  if (!eventKey) {
+async function uploadQueuedMediaFile(filePath: string, queuedEventKey: string) {
+  if (!queuedEventKey) {
     throw new Error("No event key");
   }
 
@@ -1203,9 +1248,11 @@ async function uploadQueuedMediaFile(filePath: string) {
 
   let presignData: PresignedUploadResponse | null = null;
   try {
-    presignData = await requestPresignedUpload(EvalTechAPI.mediaPresign, {
-      media_type: "video",
-    });
+    presignData = await requestPresignedUpload(
+      EvalTechAPI.mediaPresign,
+      { media_type: "video" },
+      queuedEventKey,
+    );
   } catch (error) {
     if (isMonitoringStoppedError(error)) {
       throw error;
@@ -1234,7 +1281,7 @@ async function uploadQueuedMediaFile(filePath: string) {
 
   if (presignData) {
     try {
-      await logMediaCapture(presignData.s3_key);
+      await logMediaCapture(presignData.s3_key, queuedEventKey);
     } catch (error) {
       if (isMonitoringStoppedError(error)) {
         throw error;
@@ -1254,7 +1301,7 @@ async function uploadQueuedMediaFile(filePath: string) {
     method: "POST",
     body: formData,
     headers: {
-      Authorization: `Bearer ${eventKey}`,
+      Authorization: `Bearer ${queuedEventKey}`,
     },
   });
 
@@ -1275,9 +1322,6 @@ async function processMediaQueue() {
   if (mediaQueueProcessing) {
     return;
   }
-  if (!eventKey) {
-    return;
-  }
   if (!mediaQueueInitialized) {
     return;
   }
@@ -1295,8 +1339,19 @@ async function processMediaQueue() {
 
       try {
         mediaQueueCurrentPath = item.filePath;
-        await uploadQueuedMediaFile(item.filePath);
+        if (!item.eventKey) {
+          console.warn(
+            `[UPLOAD] Missing event key for queued file ${path.basename(item.filePath)}; discarding`,
+          );
+          await safeUnlink(item.filePath);
+          await safeUnlinkMetadata(item.filePath);
+          mediaQueue.shift();
+          mediaQueueCurrentPath = null;
+          continue;
+        }
+        await uploadQueuedMediaFile(item.filePath, item.eventKey);
         await safeUnlink(item.filePath);
+        await safeUnlinkMetadata(item.filePath);
         mediaQueue.shift();
         mediaQueueCurrentPath = null;
       } catch (error) {
