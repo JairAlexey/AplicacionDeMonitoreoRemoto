@@ -57,6 +57,7 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
   const uploadQueueRef = useRef<{ id: number; blob: Blob }[]>([]);
   const uploadInProgressRef = useRef(false);
   const uploadWaitersRef = useRef<(() => void)[]>([]);
+  const drainUploadsOnStopRef = useRef(false);
   const mediaConstraints: MediaStreamConstraints = {
     video: {
       width: { ideal: 1280, max: 1280 },
@@ -415,7 +416,7 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
 
       try {
         if (isRecording || isMonitoringActiveRef.current) {
-          await stopRecording();
+          await stopRecording(true);
         }
       } catch (error) {
         console.error("Error during app closing cleanup:", error);
@@ -587,7 +588,7 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
   };
 
   // Función compartida para detener el monitoreo (usada tanto manualmente como automáticamente)
-  const stopRecording = async () => {
+  const stopRecording = async (drainUploads = false) => {
     // Verificar tanto el estado como la referencia para evitar problemas de clausura
     if (!mediaRecorder || (!isRecording && !isMonitoringActiveRef.current)) {
       return;
@@ -615,6 +616,7 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
 
       // Usar la función personalizada de cleanup
       if (mediaRecorder && typeof (mediaRecorder as any).stopAndUpload === 'function') {
+        drainUploadsOnStopRef.current = drainUploads;
         await (mediaRecorder as any).stopAndUpload();
       }
 
@@ -977,6 +979,16 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
         }
 
         await finalizeRecorder(currentRecorder);
+
+        if (drainUploadsOnStopRef.current) {
+          const drained = await waitForUploadsToDrain(8000);
+          if (!drained) {
+            console.warn(
+              "[VIDEO] Timeout esperando flush de uploads locales, continuando cierre",
+            );
+          }
+          drainUploadsOnStopRef.current = false;
+        }
 
         console.log(
           "[VIDEO] Monitoreo detenido; los uploads continuan en segundo plano",
