@@ -978,14 +978,9 @@ const MediaCapture: React.FC<JoinEventFormProps> = ({ eventKey, onExit }) => {
 
         await finalizeRecorder(currentRecorder);
 
-        const drained = await waitForUploadsToDrain(180000);
-        if (!drained) {
-          console.warn(
-            "[VIDEO] Timeout esperando uploads pendientes, continuando cierre",
-          );
-        }
-
-        console.log("[VIDEO] Monitoreo detenido completamente");
+        console.log(
+          "[VIDEO] Monitoreo detenido; los uploads continuan en segundo plano",
+        );
       };
 
       // Función para iniciar el ciclo de grabación (se llamará desde toggleRecording)

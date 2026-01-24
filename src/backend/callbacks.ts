@@ -2,12 +2,185 @@ import { nativeImage, desktopCapturer, screen, app, BrowserWindow } from "electr
 import { PROXY_SCRIPTS } from "./constants";
 import { API_BASE_URL } from "./config";
 import { execFile, execFileSync } from "child_process";
+import path from "node:path";
+import { promises as fs } from "node:fs";
 import { EvalTechAPI } from "../frontend/api";
 import { connectionManager } from "./connection-manager";
 let eventKey: string = "";
 let currentProxyPort: number | null = null;
 let isMonitoringActive: boolean = false;
 const MONITORING_STOPPED_CODE = "MONITORING_STOPPED";
+
+type MediaQueueItem = {
+  filePath: string;
+  size: number;
+  createdAt: number;
+  attempts: number;
+  nextAttemptAt: number | null;
+};
+
+const MEDIA_QUEUE_MAX_BYTES = 500 * 1024 * 1024;
+const MEDIA_QUEUE_DIR_NAME = "media-queue";
+const MEDIA_QUEUE_EXT = ".webm";
+
+let mediaQueueInitialized = false;
+let mediaQueue: MediaQueueItem[] = [];
+let mediaQueueProcessing = false;
+let mediaQueueRetryTimer: NodeJS.Timeout | null = null;
+let mediaQueueCurrentPath: string | null = null;
+
+const getMediaQueueDir = () => path.join(app.getPath("userData"), MEDIA_QUEUE_DIR_NAME);
+
+const sortMediaQueue = () => {
+  mediaQueue.sort((a, b) => a.createdAt - b.createdAt);
+};
+
+const safeUnlink = async (filePath: string) => {
+  try {
+    await fs.unlink(filePath);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException)?.code;
+    if (code !== "ENOENT") {
+      console.warn(`[UPLOAD] Error deleting file ${filePath}:`, error);
+    }
+  }
+};
+
+const enqueueExistingMediaFiles = async () => {
+  if (mediaQueueInitialized) {
+    return;
+  }
+
+  try {
+    await fs.mkdir(getMediaQueueDir(), { recursive: true });
+    const entries = await fs.readdir(getMediaQueueDir());
+    const items: MediaQueueItem[] = [];
+
+    for (const entry of entries) {
+      if (!entry.endsWith(MEDIA_QUEUE_EXT)) {
+        continue;
+      }
+
+      const filePath = path.join(getMediaQueueDir(), entry);
+      try {
+        const stat = await fs.stat(filePath);
+        if (!stat.isFile()) {
+          continue;
+        }
+        items.push({
+          filePath,
+          size: stat.size,
+          createdAt: stat.mtimeMs,
+          attempts: 0,
+          nextAttemptAt: null,
+        });
+      } catch (error) {
+        console.warn(`[UPLOAD] Error reading queued file ${filePath}:`, error);
+      }
+    }
+
+    mediaQueue = items;
+    sortMediaQueue();
+  } catch (error) {
+    console.error("[UPLOAD] Error initializing media queue:", error);
+  } finally {
+    mediaQueueInitialized = true;
+  }
+};
+
+const enforceMediaQueueLimit = async () => {
+  if (!mediaQueueInitialized) {
+    return;
+  }
+
+  sortMediaQueue();
+  let totalBytes = mediaQueue.reduce((sum, item) => sum + item.size, 0);
+
+  if (totalBytes <= MEDIA_QUEUE_MAX_BYTES) {
+    return;
+  }
+
+  let index = 0;
+  while (totalBytes > MEDIA_QUEUE_MAX_BYTES && mediaQueue.length > 0) {
+    if (index >= mediaQueue.length) {
+      break;
+    }
+
+    const item = mediaQueue[index];
+    if (item.filePath === mediaQueueCurrentPath) {
+      index += 1;
+      continue;
+    }
+
+    console.warn(
+      `[UPLOAD] Queue over ${MEDIA_QUEUE_MAX_BYTES} bytes. Removing oldest segment ${path.basename(item.filePath)}`,
+    );
+    await safeUnlink(item.filePath);
+    totalBytes -= item.size;
+    mediaQueue.splice(index, 1);
+  }
+};
+
+const getBackoffDelayMs = (attempts: number) => {
+  const exponent = Math.min(attempts, 6);
+  return Math.min(60000, 1000 * Math.pow(2, exponent));
+};
+
+const scheduleMediaQueueRetry = (delayMs: number) => {
+  if (mediaQueueRetryTimer) {
+    clearTimeout(mediaQueueRetryTimer);
+  }
+
+  mediaQueueRetryTimer = setTimeout(() => {
+    mediaQueueRetryTimer = null;
+    void processMediaQueue();
+  }, delayMs);
+};
+
+const dropAllQueuedMedia = async (reason: string) => {
+  console.warn(`[UPLOAD] Clearing media queue: ${reason}`);
+  const items = mediaQueue;
+  mediaQueue = [];
+  for (const item of items) {
+    await safeUnlink(item.filePath);
+  }
+};
+
+const ensureMediaQueueReady = async () => {
+  await enqueueExistingMediaFiles();
+  await enforceMediaQueueLimit();
+  if (eventKey) {
+    void processMediaQueue();
+  }
+};
+
+const generateMediaFilename = () => {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const nonce = Math.random().toString(36).slice(2, 8);
+  return `recording_${timestamp}_${nonce}${MEDIA_QUEUE_EXT}`;
+};
+
+async function enqueueMediaSegment(buffer: Buffer) {
+  await ensureMediaQueueReady();
+
+  const filename = generateMediaFilename();
+  const filePath = path.join(getMediaQueueDir(), filename);
+
+  await fs.writeFile(filePath, buffer);
+
+  const item: MediaQueueItem = {
+    filePath,
+    size: buffer.length,
+    createdAt: Date.now(),
+    attempts: 0,
+    nextAttemptAt: null,
+  };
+
+  mediaQueue.push(item);
+  sortMediaQueue();
+  await enforceMediaQueueLimit();
+  void processMediaQueue();
+}
 
 // Variables de control para evitar ejecuciones duplicadas
 let isCleaningUp: boolean = false;
@@ -551,6 +724,7 @@ export const joinEvent = async (_eventKey: string) => {
   const verification = await verifyEventKey(_eventKey);
   if (verification.isValid && verification.dateIsValid) {
     eventKey = _eventKey;
+    await ensureMediaQueueReady();
     return true;
   }
   return false;
@@ -1018,95 +1192,143 @@ export const stopCaptureInterval = () => {
   ScreenCaptureManager.getInstance().stopCapture();
 };
 
+async function uploadQueuedMediaFile(filePath: string) {
+  if (!eventKey) {
+    throw new Error("No event key");
+  }
+
+  const buffer = await fs.readFile(filePath);
+  const blob = new Blob([buffer], { type: "video/webm" });
+  const filename = path.basename(filePath);
+
+  let presignData: PresignedUploadResponse | null = null;
+  try {
+    presignData = await requestPresignedUpload(EvalTechAPI.mediaPresign, {
+      media_type: "video",
+    });
+  } catch (error) {
+    if (isMonitoringStoppedError(error)) {
+      throw error;
+    }
+    console.warn(
+      "[UPLOAD] Presign failed, falling back to backend upload:",
+      error,
+    );
+  }
+
+  if (presignData) {
+    try {
+      await uploadWithPresignedUrl(
+        presignData.upload_url,
+        blob,
+        presignData.headers,
+      );
+    } catch (error) {
+      console.warn(
+        "[UPLOAD] S3 upload failed, falling back to backend upload:",
+        error,
+      );
+      presignData = null;
+    }
+  }
+
+  if (presignData) {
+    try {
+      await logMediaCapture(presignData.s3_key);
+    } catch (error) {
+      if (isMonitoringStoppedError(error)) {
+        throw error;
+      }
+      throw error;
+    }
+    console.log(
+      `[UPLOAD] Video segment uploaded to S3: ${filename} (${(blob.size / 1024).toFixed(2)} KB)`,
+    );
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append("media", blob, filename);
+
+  const response = await fetch(`${API_BASE_URL}${EvalTechAPI.mediaCapture}`, {
+    method: "POST",
+    body: formData,
+    headers: {
+      Authorization: `Bearer ${eventKey}`,
+    },
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    if (handleMonitoringNotStarted(response.status, errorText, "media upload")) {
+      throw createMonitoringStoppedError();
+    }
+    throw new Error(`Upload failed: ${response.status} - ${errorText}`);
+  }
+
+  console.log(
+    `[UPLOAD] Video segment sent: ${filename} (${(blob.size / 1024).toFixed(2)} KB)`,
+  );
+}
+
+async function processMediaQueue() {
+  if (mediaQueueProcessing) {
+    return;
+  }
+  if (!eventKey) {
+    return;
+  }
+  if (!mediaQueueInitialized) {
+    return;
+  }
+
+  mediaQueueProcessing = true;
+  try {
+    while (mediaQueue.length > 0) {
+      const item = mediaQueue[0];
+      const now = Date.now();
+
+      if (item.nextAttemptAt && item.nextAttemptAt > now) {
+        scheduleMediaQueueRetry(item.nextAttemptAt - now);
+        break;
+      }
+
+      try {
+        mediaQueueCurrentPath = item.filePath;
+        await uploadQueuedMediaFile(item.filePath);
+        await safeUnlink(item.filePath);
+        mediaQueue.shift();
+        mediaQueueCurrentPath = null;
+      } catch (error) {
+        mediaQueueCurrentPath = null;
+        if (isMonitoringStoppedError(error)) {
+          await dropAllQueuedMedia("monitoring stopped");
+          break;
+        }
+
+        item.attempts += 1;
+        const delayMs = getBackoffDelayMs(item.attempts);
+        item.nextAttemptAt = Date.now() + delayMs;
+        console.warn(
+          `[UPLOAD] Upload failed for ${path.basename(item.filePath)}. Retry in ${Math.round(delayMs / 1000)}s`,
+        );
+        scheduleMediaQueueRetry(delayMs);
+        break;
+      }
+    }
+  } finally {
+    mediaQueueProcessing = false;
+  }
+}
+
 //*************** MEDIA FUNCTIONS ***************
 export const uploadMedia = async (data: ArrayBuffer) => {
   try {
-    console.log(`[UPLOAD] Iniciando upload de ${(data.byteLength / 1024).toFixed(2)} KB`);
-    
-    // Create Blob directly from ArrayBuffer
-    // Use slice to ensure we have a fresh copy and avoid transfer issues
-    const blob = new Blob([data.slice(0)], { type: "video/webm" });
-    
-    // Generar nombre único con timestamp para identificar cada segmento
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const filename = `recording_${timestamp}.webm`;
-
-    let presignData: PresignedUploadResponse | null = null;
-    try {
-      presignData = await requestPresignedUpload(EvalTechAPI.mediaPresign, {
-        media_type: "video",
-      });
-    } catch (error) {
-      if (!isMonitoringStoppedError(error)) {
-        console.warn(
-          "[UPLOAD] Presign failed, falling back to backend upload:",
-          error,
-        );
-      }
-    }
-
-    if (presignData) {
-      try {
-        await uploadWithPresignedUrl(
-          presignData.upload_url,
-          blob,
-          presignData.headers,
-        );
-      } catch (error) {
-        console.warn(
-          "[UPLOAD] S3 upload failed, falling back to backend upload:",
-          error,
-        );
-        presignData = null;
-      }
-    }
-
-    if (presignData) {
-      try {
-        await logMediaCapture(presignData.s3_key);
-      } catch (error) {
-        if (isMonitoringStoppedError(error)) {
-          return;
-        }
-        throw error;
-      }
-      console.log(
-        `[UPLOAD] Video segment uploaded to S3: ${filename} (${(blob.size / 1024).toFixed(2)} KB)`,
-      );
-      return;
-    }
-
-    const formData = new FormData();
-    formData.append("media", blob, filename);
-
-    const response = await fetch(
-      `${API_BASE_URL}${EvalTechAPI.mediaCapture}`,
-      {
-        method: "POST",
-        body: formData,
-        headers: {
-          Authorization: `Bearer ${eventKey}`,
-        },
-      },
-    );
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      if (
-        handleMonitoringNotStarted(
-          response.status,
-          errorText,
-          "media upload",
-        )
-      ) {
-        return;
-      }
-      throw new Error(`Upload failed: ${response.status} - ${errorText}`);
-    }
-
     console.log(
-      `[UPLOAD] Video segment sent: ${filename} (${(blob.size / 1024).toFixed(2)} KB)`,
+      `[UPLOAD] Encolando segmento de ${(data.byteLength / 1024).toFixed(2)} KB`,
     );
+    const buffer = Buffer.from(data);
+    await enqueueMediaSegment(buffer);
   } catch (error) {
     console.error("[UPLOAD] Error:", error);
     throw error; // Re-lanzar para que el caller lo maneje
