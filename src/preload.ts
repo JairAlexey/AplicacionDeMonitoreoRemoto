@@ -18,6 +18,8 @@ const registry = {
   registerConsent: true,
   minimizeWindow: true,
   appReady: true,
+  getAlwaysOnTop: true,
+  setAlwaysOnTop: true,
 };
 
 const handlersMappedToIpcRenderer = Object.entries(registry)

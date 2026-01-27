@@ -17,6 +17,14 @@ let mainWindow: BrowserWindow | null = null;
 let shutdownInProgress = false;
 const APP_CLOSING_TIMEOUT_MS = 15000;
 
+const getActiveWindow = () => {
+  const windowRef = mainWindow ?? BrowserWindow.getAllWindows()[0];
+  if (!windowRef || windowRef.isDestroyed()) {
+    return null;
+  }
+  return windowRef;
+};
+
 const requestRendererStopRecording = async () => {
   if (!callbacks.getMonitoringStatus()) {
     return;
@@ -213,6 +221,22 @@ process.on("uncaughtException", async (error) => {
 process.on("unhandledRejection", async (error) => {
   console.error("[MAIN] unhandledRejection:", error);
   await runShutdown(true);
+});
+
+ipcMain.handle("getAlwaysOnTop", () => {
+  const windowRef = getActiveWindow();
+  const alwaysOnTop = windowRef?.isAlwaysOnTop() ?? false;
+  return { success: !!windowRef, alwaysOnTop };
+});
+
+ipcMain.handle("setAlwaysOnTop", (_event, enabled: boolean) => {
+  const windowRef = getActiveWindow();
+  if (!windowRef) {
+    return { success: false, alwaysOnTop: false, error: "Window not available" };
+  }
+
+  windowRef.setAlwaysOnTop(Boolean(enabled), "floating");
+  return { success: true, alwaysOnTop: windowRef.isAlwaysOnTop() };
 });
 
 // Registrar callbacks IPC

@@ -25,5 +25,7 @@ interface Window {
     appReady: () => void;
     unsetProxySettings: () => Promise<void>;
     minimizeWindow: () => Promise<void>;
+    getAlwaysOnTop: () => Promise<{ success: boolean; alwaysOnTop: boolean }>;
+    setAlwaysOnTop: (enabled: boolean) => Promise<{ success: boolean; alwaysOnTop: boolean; error?: string }>;
   };
 }
